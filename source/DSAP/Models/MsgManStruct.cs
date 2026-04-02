@@ -15,9 +15,6 @@ namespace DSAP.Models
         public const int OFFSET_ITEM_NAMES = 0x380;
         public const int OFFSET_ITEM_CAPTIONS = 0x378;
         public const int OFFSET_ITEM_DESCRIPTIONS = 0x328;
-        public const int OFFSET_RING_NAMES = 0x390;
-        public const int OFFSET_RING_CAPTIONS = 0x388;
-        public const int OFFSET_RING_DESCRIPTIONS = 0x370;
         public int BufferSize { get; set; }
         public ulong BufferLoc { get; set; }
         public byte[] AllBytes { get; set; }
