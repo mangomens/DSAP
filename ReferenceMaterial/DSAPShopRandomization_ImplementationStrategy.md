@@ -1,5 +1,12 @@
 # DSAP Shop Randomization: Implementation Strategy
 
+> **Historical document (2026-03-30).** This was the pre-implementation design plan. Shop Sanity is now fully implemented and working. Key differences from this plan:
+> - **Native item passthrough** replaces the pure-wrapper approach for items destined for the local player. Real DSR `equipId`/`equipType` values are used instead of always forcing `equipType=3` (Goods).
+> - **Purchase flag convention changed**: flags use spaced formula `71810000 + (i/32)*1000 + (i%32)*32` (32 tails apart) instead of dense `71810000 + rowId`. Dense packing caused flag corruption due to DSR's byte-level overwrite behavior (see SOT §6.3).
+> - **Double-grant prevention** was added: `NativeShopLocationIds` HashSet + skip logic in `Client_ItemReceived`.
+> - **Andre entry count** is 21, not 22.
+> - See `ShopRandomization_ImplementationStatus.md` for current status.
+
 This document describes a complete implementation strategy for adding shop item randomization to DSAP. It is based on direct analysis of the DSAP codebase, the Archipelago framework, the prior shop development attempt (visible in `alldumps_shops_only.txt`), and the existing ItemLot randomization system as a proven model.
 
 ---
@@ -106,13 +113,12 @@ The `alldumps_shops_only.txt` reveals a prior shop randomization attempt. This i
 | UM key items | 1105, 1133, 1106 | 11110042, 823, 824 | Existing 7 |
 
 ### Purchase flag convention
-`purchaseFlag = 71810000 + shopRow`
 
-Example: Row 1401 (Andre's Crest of Artorias) → purchaseFlag = 71811401
+**Original plan (SUPERSEDED):** `purchaseFlag = 71810000 + shopRow` — dense packing. This caused flag corruption because DSR overwrites entire bytes rather than individual bits. Two flags sharing the same byte corrupt each other.
 
-This convention is clean and collision-free because:
-- Vanilla event flags use prefixes like 1101xxxx, 1130xxxx, 1160xxxx, 1180xxxx, 1121xxxx
-- The 7181xxxx prefix doesn't appear in vanilla
+**Actual implementation:** `purchaseFlag = 71810000 + (i/32)*1000 + (i%32)*32` — each flag is spaced 32 tails apart, ensuring every flag occupies its own 4-byte word. The full set of 86 flags is pre-computed in `ShopFlags.json`.
+
+The 7181xxxx prefix is collision-free with vanilla flags (which use prefixes like 1101xxxx, 1130xxxx, etc.).
 
 ---
 
@@ -640,7 +646,9 @@ The full file will have one entry per shop check (see Appendix §15 for the comp
 
 ### 10.2 Event flag assignment
 
-**Convention**: `purchaseFlag = 71810000 + shopRowId`
+> **SUPERSEDED**: The dense convention `71810000 + shopRowId` below was the original plan. It was changed to a spaced formula `71810000 + (i/32)*1000 + (i%32)*32` because DSR overwrites entire bytes rather than individual bits, causing flag corruption when multiple flags share a byte. See §3 Purchase flag convention note and SOT §6.3 for details. The actual flags are pre-computed in `ShopFlags.json`.
+
+**Original plan** (for reference — these flag values are NOT used):
 
 | Row Range | Merchant | Example Flag |
 |-----------|----------|-------------|

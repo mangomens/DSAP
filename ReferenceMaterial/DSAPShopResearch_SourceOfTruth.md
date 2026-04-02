@@ -167,18 +167,19 @@ Standard offsets: `ParamOffset1 = 0x38`, `ParamOffset2 = 0x10` applied during tr
 
 ### 3.4 Current DSAP Shop Status
 
-Shop items exist as **7 location definitions** with category `SHOP_ITEM` (value 9) in `Locations.py`. They cover only key items purchasable from the Undead Merchant and Andre of Astora. **Shop randomization is NOT currently implemented** — the SHOP_ITEM category is excluded from `enabled_location_categories`.
+**Shop randomization is fully implemented and working** (as of 2026-04-02). The `shop_sanity` option enables 86 SHOP_ITEM locations across 5 merchants. When enabled, `ShopHelper.BuildShopReplacementMap()` builds AP item replacements and `UpdateShopLineupParams()` overwrites DSR's in-memory ShopLineupParam rows.
 
-The existing 7 shop locations:
-| AP ID | Name | Merchant |
-|-------|------|----------|
-| 11110042 | UB: Residence Key | Undead Merchant (Male) |
-| 11110823 | UB: Bottomless Box | Undead Merchant (Male) |
-| 11110824 | UB: Repairbox | Undead Merchant (Male) |
-| 11110825 | UP: Andre - Bottomless Box | Andre of Astora |
-| 11110826 | UP: Andre - Weapon Smithbox | Andre of Astora |
-| 11110827 | UP: Andre - Armor Smithbox | Andre of Astora |
-| 11110822 | UP: Andre - Crest of Artorias | Andre of Astora |
+**Key design: Native item passthrough** — When a scouted shop item is a physical DSR item destined for the local player, the shop row uses the **real DSR equipId and equipType** (weapon/armor/ring/goods). This gives correct tab placement, icons, names, and descriptions without needing cross-category FMG injection. Non-physical items and items for other players use AP stub entries in EquipParamGoods (equipType=3).
+
+**Double-grant prevention** — Native shop items are already obtained from the shop itself. The `Client_ItemReceived` handler skips granting items from the player's own slot when the location is in `NativeShopLocationIds`.
+
+| Merchant | Region | Row Range | Location Count |
+|----------|--------|-----------|---------------|
+| Undead Merchant (Male) | Upper Undead Burg | 1100–1134 | 34 |
+| Female Merchant | Lower Undead Burg | 1200–1220 | 21 |
+| Andre of Astora | Undead Parish | 1400–1420 | 21 |
+| Ingward | Upper New Londo Ruins | 2400–2401 | 2 |
+| Oswald of Carim | Undead Parish | 4401–4408 | 8 |
 
 ---
 
@@ -263,7 +264,7 @@ Non-FMG pointers (checked for indirect chains via Part B2 — none found):
 
 **Conclusion: Weapon and Protector name/caption/description FMGs are NOT accessible through MsgMan.** The entire 0x200-0x800 space has been exhaustively scanned and every FMG identified. None contain weapon names (e.g. "Dagger") or protector names (e.g. "Leather Armor"). Weapon/protector IDs that collide with system text entries (+0x270, +0x330, +0x3E0) return system strings, not item names.
 
-**Implementation decision**: Since weapon/protector FMGs cannot be found, AP stubs will be created in the correct param tables (for correct tab/icon) but ALL AP item text will be written to the Goods FMGs only, which already work. Whether the game resolves names from the Goods FMG for weapon-tab items will be verified in testing.
+**Implementation decision (SUPERSEDED)**: ~~Since weapon/protector FMGs cannot be found, AP stubs will be created in the correct param tables (for correct tab/icon) but ALL AP item text will be written to the Goods FMGs only.~~ **Actual implementation**: The native passthrough approach bypasses this problem entirely. When a shop location contains a real DSR item for the local player, the shop row uses the item's real `equipId` and `equipType` — DSR resolves the name, icon, and description from the item's own param table natively. AP stubs (for non-physical items or items for other players) still use EquipParamGoods with Goods FMG text, which works correctly since their equipType=3.
 
 Each string table has: Header (0x1c bytes) → Span maps → String offset table → Unicode string data.
 
@@ -376,9 +377,10 @@ When `Client_LocationCompleted(location)` fires:
 ### 5.4 Item Receive Handler
 
 When `Client_ItemReceived` fires:
-1. Look up item in `AllItemsByApId` dictionary
-2. Check `SlotLocToItemUpgMap` for weapon upgrade data → apply infusion+level
-3. Route by item category:
+1. **Native shop skip check**: If item is from the player's own slot AND the location is in `NativeShopLocationIds`, skip granting (the shop already gave the real item). Mark success.
+2. Look up item in `AllItemsByApId` dictionary
+3. Check `SlotLocToItemUpgMap` for weapon upgrade data → apply infusion+level
+4. Route by item category:
    - **Trap** → `RunLagTrap()` (20-second effect)
    - **DsrEvent** → `ReceiveEventItem()` → find EmkController by ApId → unlock fog wall
    - **BonfireWarp** → `ReceiveBonfireWarpItem()` → write progression flag bit
@@ -445,6 +447,8 @@ Returns: (ulong byte_offset, int bit_index)
 **Base address**: `EventFlagsBase` (resolved via AoB scan for event flags pattern)
 
 **Usage in shops**: The ShopLineupParam `eventFlag` field uses the same system to track how many of a finite item have been sold.
+
+**CRITICAL: DSR's byte-level overwrite behavior** — When DSR tracks a purchase via event flags, it **overwrites the entire byte** rather than using bitwise OR on individual bits. This means multiple flags sharing the same byte will corrupt each other's tracking state. Evidence: buying flag 71811220 (bit3) changed the shared byte from 0x10→0x08, clearing flag 71811219 (bit4). Purchase flags MUST be spaced so each occupies its own 4-byte word (32 tails apart minimum).
 
 ### 6.4 DSRLocationData `id` vs ItemLotFlag `Id`
 
@@ -551,7 +555,7 @@ equipId (e.g., 200000 for a specific weapon)
 | SoloParam → CharaInit | +0x600 | `CharaInitParam.cs` | CharaInitParam entry size=0xF0 |
 | SoloParam → Move | +0x5B8 | `MoveParam.cs` | MoveParam entry size=0x8D |
 | Goods icon offset | +0x2C in entry | `ApItemInjectorHelper.cs` | short (s16), icon ID within EquipParamGoods |
-| Purchase flag base | 71810000 + rowId | `ShopHelper.cs` | Convention for shop purchase event flags |
+| Purchase flag spacing | 32 tails apart in 7181xxxx | `ShopFlags.json` | Each flag gets own 4-byte word (see §6.3 byte-overwrite warning) |
 | EMK node: eventid | +0x30 | `EmkHelper.cs` | Fog wall linked list |
 | EMK node: eventslot | +0x34 | `EmkHelper.cs` | |
 | EMK node: next_ptr | +0x68 | `EmkHelper.cs` | |

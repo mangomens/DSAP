@@ -3,8 +3,7 @@
 1. Redeploy DSAP EXE and copy into `C:\Users\ngold\Workspace\ArchipelagoDev\DSAP`
 
 ```bash
-cd /mnt/c/Users/ngold/Workspace/ArchipelagoDev/DSAP/ && dotnet publish source/DSAP.Desktop/DSAP.Desktop.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -o source/publish_out_win && cp -f source/publish_out_win/DSAP.Desktop.exe /mnt/c/Users/ngold/Workspace/ArchipelagoDev/DSAP/DSAP.Desktop.exe
-
+cd /mnt/c/Users/ngold/Workspace/ArchipelagoDev/DSAP && dotnet publish source/DSAP.Desktop/DSAP.Desktop.csproj -c Release -r win-x64 && cp -f source/DSAP.Desktop/bin/Release/net8.0/win-x64/publish/DSAP.Desktop.exe /mnt/c/Users/ngold/Workspace/ArchipelagoDev/DSAP/DSAP.Desktop.exe
 ```
 
 2. Redeploy `dsr.apworld` and copy into `C:\ProgramData\Archipelago\custom_worlds`

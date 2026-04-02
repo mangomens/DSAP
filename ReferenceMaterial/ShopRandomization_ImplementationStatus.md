@@ -1,7 +1,7 @@
 # Shop Randomization — Implementation Status
 
-**Last Updated:** 2026-03-31  
-**Status:** Phase 1 complete, deployed, awaiting in-game testing
+**Last Updated:** 2026-04-02  
+**Status:** Complete and working — deployed, tested in-game, all 86 shop locations functional
 
 ---
 
@@ -9,7 +9,7 @@
 
 Shop Randomization ("Shop Sanity") adds merchant inventories as Archipelago locations. When enabled, each item a merchant sells becomes an AP check. The client rewrites DSR's in-memory ShopLineupParam rows to point at AP item stubs, and custom purchase flags track which checks the player has completed.
 
-**Scope (Phase 1):** 5 safe merchants, 87 total shop locations, all items free (value=0), single-purchase (sellQuantity=1).
+**Scope (Phase 1):** 5 safe merchants, 86 total shop locations, all items free (value=0), single-purchase (sellQuantity=1).
 
 ### Merchants Included
 
@@ -17,21 +17,22 @@ Shop Randomization ("Shop Sanity") adds merchant inventories as Archipelago loca
 |---|---|---|---|
 | Undead Merchant (Male) | Upper Undead Burg | 1100–1134 | 34 |
 | Female Merchant | Lower Undead Burg | 1200–1220 | 21 |
-| Andre the Blacksmith | Undead Parish | 1400–1420 | 22 |
+| Andre the Blacksmith | Undead Parish | 1400–1420 | 21 |
 | Ingward | Upper New Londo Ruins | 2400–2401 | 2 |
 | Oswald of Carim | Undead Parish (Bell Gargoyles) | 4401–4408 | 8 |
 
 ### Key Technical Details
 
 - **ShopLineupParam**: 32 bytes/row, SoloParamMan offset 0x720
-- **Purchase flag convention**: `71810000 + shopRowId` (e.g., row 1401 → flag 71811401)
-- **Wrapper approach**: Overwrites ShopLineupParam rows to reference existing AP EquipParamGoods stubs (already created by `AddAPItems` for all scouted locations)
+- **Purchase flag convention**: Spaced formula `71810000 + (i/32)*1000 + (i%32)*32` — each flag 32 tails apart, ensuring every flag gets its own 4-byte word (dense `71810000 + rowId` caused flag corruption due to DSR's byte-level overwrite behavior)
+- **Wrapper approach**: Overwrites ShopLineupParam rows to reference existing AP EquipParamGoods stubs for non-local or non-physical items. **Native passthrough**: When a shop item is a physical DSR item for the local player, uses the real `equipId` and `equipType` (weapon/armor/ring/goods) instead of a goods stub — gives correct tab placement, icons, names, and descriptions natively.
+- **Double-grant prevention**: `NativeShopLocationIds` HashSet tracks which locations are native passthroughs. `Client_ItemReceived` skips granting items from the player's own slot for these locations (the shop already gave the real item).
 - **Sentinel entry**: Row ID 99999998 prevents redundant reloads (same pattern used by ItemLotHelper)
 - **Existing hooks**: The item-add hook at 0x1407479E0 and popup hook at 0x140728c90 already cover AP item IDs — shop purchases of AP items automatically route through these
 
-### Known Risk
+### Known Issue (Resolved)
 
-`sellQuantity=1` may cause DSR to remove the shop row from the UI after purchase, potentially causing cursor/index corruption. User chose to test first and debug if needed.
+`sellQuantity=1` does NOT cause cursor/index corruption — confirmed in testing. Items disappear from the shop after purchase as expected.
 
 ### Excluded from Phase 1
 
@@ -61,7 +62,7 @@ Embedded JSON resource mapping all 87 shop locations to their param rows and pur
 #### `source/DSAP/Helpers/ShopHelper.cs`
 Core shop randomization logic. Three main methods:
 
-- **`BuildShopReplacementMap(out map, scoutedLocationInfo)`** — Iterates scouted AP locations, matches against enabled ShopFlags by ID, creates `ShopReplacement` entries with equipId pointing to the AP goods stub.
+- **`BuildShopReplacementMap(out map, out nativeShopLocIds, scoutedLocationInfo)`** — Iterates scouted AP locations, matches against enabled ShopFlags by ID, creates `ShopReplacement` entries. For items destined for the local player that are physical DSR items, uses native equipId/equipType. For all others, uses AP goods stub (equipType=3). Also outputs a `HashSet<long>` of native shop location IDs for double-grant prevention.
 - **`OverwriteShopParams(paramBytes, rowCount, replacementMap)`** — Binary-level mutation of param bytes. For each row whose ID matches a replacement, writes: equipId, value (0), mtrlId (-1), eventFlag (purchase flag), sellQuantity (1), shopType, equipType (3 = Goods).
 - **`UpdateShopLineupParams(replacementMap)`** — Full pipeline: reads ShopLineupParam via `ParamHelper.ReadFromBytes()` → calls `OverwriteShopParams` → adds sentinel row 99999998 → writes back via `ParamHelper.WriteFromParamSt()`.
 
@@ -155,7 +156,5 @@ Two changes:
 
 ## What Comes Next
 
-- **In-game testing** of Phase 1 to confirm shops display AP items and purchases register as checks
-- **Debug sellQuantity issue** if shop UI breaks after purchasing (cursor/index corruption)
 - **Phase 2**: Add more merchants (Domhnall, Patches, Giant Blacksmith, etc.)
 - **Phase 2+**: Variable pricing, multi-quantity items, shop-specific filler pools

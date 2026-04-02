@@ -55,7 +55,9 @@ DSAP/
     │   │   ├── ItemLotItem.cs       # Single item within an ItemLot row
     │   │   ├── LastBonfire.cs / Loadout.cs / ThiefItem.cs
     │   │   ├── MsgManStruct.cs      # Message manager binary structure (names, captions, descriptions)
-    │   │   └── ParamStruct.cs       # Generic SoloParam binary structure (header, entries, strings)
+    │   │   ├── ParamStruct.cs       # Generic SoloParam binary structure (header, entries, strings)
+    │   │   ├── ShopFlag.cs          # Shop flag entry: Id, Name, Row, PurchaseFlag, IsEnabled
+    │   │   └── ShopLineupParam.cs   # IParam for ShopLineupParam (Size=0x20, spOffset=0x720)
     │   │
     │   ├── Params/                  # Param row size/offset definitions
     │   │   ├── CharaInitParam.cs    # Character initialization params
@@ -63,7 +65,8 @@ DSAP/
     │   │   ├── EquipParamWeapon.cs  # Weapon params (includes stat requirement offsets)
     │   │   ├── ItemLotParam.cs      # ItemLot param row layout
     │   │   ├── MagicParam.cs        # Spell params (stat/covenant requirements)
-    │   │   └── MoveParam.cs         # Movement params
+    │   │   ├── MoveParam.cs         # Movement params
+    │   │   └── ShopLineupParam.cs   # Shop param (Size=0x20, spOffset=0x720)
     │   │
     │   └── Resources/               # Embedded JSON data files
     │       ├── Bonfires.json        # Bonfire warp definitions
@@ -74,6 +77,7 @@ DSAP/
     │       ├── DsrEvents.json       # Fog wall event definitions
     │       ├── DoorFlags.json, FogWallFlags.json, MiscFlags.json
     │       ├── ItemLots.json        # ItemLot → event flag mappings
+    │       ├── ShopFlags.json       # Shop location → row + purchase flag mappings (86 entries)
     │       ├── Gifts.json, ThiefItems.json
     │       └── Loadouts.json, LastBonfires.json
     │
@@ -210,6 +214,7 @@ The `DSROption` dataclass aggregates all options:
 
 | Group | Option | Type | Default |
 |-------|--------|------|---------|
+| Sanity | `shop_sanity` | Toggle | Off |
 | Sanity | `fogwall_sanity` | DefaultOnToggle | On |
 | Sanity | `boss_fogwall_sanity` | Toggle | Off |
 | Logic | `logic_to_access_catacombs` | Choice (5 options) | andre_or_undead_merchant |
@@ -327,12 +332,13 @@ User clicks Connect
     ├─14. RemoveWeaponRequirements (if option enabled)
     ├─15. RemoveSpellRequirements (if option enabled)
     ├─16. UpdateItemLots → overwrite ItemLotParam in memory + force reload
+    ├─16b. If ShopSanity: BuildShopReplacementMap + UpdateShopLineupParams
     │
     ▼ Post-connect:
     │
     ├─17. DetectEventKeys → scan already-received items for fog wall unlocks
     ├─18. Build location lists for monitoring:
-    │     (boss, itemlot, bonfire, door, fogwall, misc)
+    │     (boss, itemlot, bonfire, door, fogwall, misc, shop purchase flags)
     ├─19. Client.MonitorLocationsAsync(fullLocationsList)
     ├─20. Start EMK watchers (fog wall management loop, every 1s)
     └─21. Start InGame watcher
@@ -345,6 +351,7 @@ AP Server sends item to client
     │
     ▼ Client_ItemReceived fires
     │
+    ├─ If item is from own slot AND location is in NativeShopLocationIds → skip (shop already gave it)
     ├─ Look up item in AllItemsByApId dictionary
     ├─ Check SlotLocToItemUpgMap for weapon upgrades
     │   └─ If upgrade exists → apply infusion+level via MiscHelper.UpgradeItem()
@@ -506,6 +513,7 @@ Appended to every written param table:
 | EquipParamWeapon | Zero str/dex/int/faith bytes | Remove weapon requirements option |
 | MagicParam | Zero int/faith + clear covenant bits | Remove spell requirements option |
 | ItemLotParam | Overwrite lot items | Core item randomization |
+| ShopLineupParam | Overwrite shop rows with AP items | Shop randomization (when shop_sanity enabled) |
 | CharaInitParam | Modify starting equipment | Loadout randomization |
 
 ### 4.11 Message Manager System (`MsgManHelper.cs`, `MsgManStruct.cs`)
@@ -643,12 +651,24 @@ INBOUND (player receives item):
 
 ## 8. Shop System
 
-Shop items exist as `DSRLocationCategory.SHOP_ITEM` (value 9) in the location tables. Examples:
-- "UB: Residence Key" (Undead Merchant)
-- "UP: Andre - Crest of Artorias"
-- Various merchant inventory items
+Shop randomization ("Shop Sanity") is **fully implemented and working**. When the `shop_sanity` option is enabled, 86 shop locations across 5 merchants become AP checks.
 
-These locations currently appear in the location tables but `SHOP_ITEM` is listed in `location_skip_categories`, meaning shop items are **not currently randomized** — they exist as data definitions for future implementation.
+### Architecture
+- `ShopHelper.BuildShopReplacementMap()` matches scouted AP locations against `ShopFlags.json` entries
+- **Native passthrough**: When a scouted item is a physical DSR item for the local player, the shop row uses the real `equipId` and `equipType` (weapon/armor/ring/goods), giving correct tab placement, icons, names, and descriptions natively
+- **AP stubs**: Non-physical items and items for other players use `equipType=3` (Goods) pointing at the AP EquipParamGoods stub
+- `ShopHelper.UpdateShopLineupParams()` overwrites DSR's in-memory ShopLineupParam rows
+- **Purchase flags**: Custom event flags in the 7181xxxx range, spaced 32 tails apart (`71810000 + (i/32)*1000 + (i%32)*32`) to avoid DSR's byte-level overwrite corruption
+- **Double-grant prevention**: `NativeShopLocationIds` HashSet tracks which locations are native passthroughs; `Client_ItemReceived` skips granting items from the player's own slot for these locations
+
+### Merchants (Phase 1)
+| Merchant | Region | Rows | Count |
+|----------|--------|------|-------|
+| Undead Merchant (Male) | Upper Undead Burg | 1100–1134 | 34 |
+| Female Merchant | Lower Undead Burg | 1200–1220 | 21 |
+| Andre of Astora | Undead Parish | 1400–1420 | 21 |
+| Ingward | Upper New Londo Ruins | 2400–2401 | 2 |
+| Oswald of Carim | Undead Parish | 4401–4408 | 8 |
 
 ---
 
