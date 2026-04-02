@@ -181,12 +181,18 @@ class EnableDeathlinkOption(Toggle):
     """Includes Deathlink"""
     display_name = "Enable Deathlink"
 
+class ShopSanity(Toggle):
+    """Randomizes items sold by merchants. Each shop item becomes an AP location.
+    When enabled, merchant inventories are replaced with AP checks."""
+    display_name = "Shop Sanity"
+
 
 # Group relevant options
 option_groups = [
     OptionGroup("Sanity", [
         FogwallSanity,
         BossFogwallSanity,
+        ShopSanity,
         ]),
     OptionGroup("Logic", [
         LogicToAccessCatacombs,
@@ -221,6 +227,7 @@ class DSROption(PerGameCommonOptions):
     excluded_location_behavior: ExcludedLocationBehaviorOption
     fogwall_sanity: FogwallSanity
     boss_fogwall_sanity: BossFogwallSanity
+    shop_sanity: ShopSanity
     logic_to_access_catacombs: LogicToAccessCatacombs
 
     randomize_starting_loadouts: RandomizeStartingLoadouts

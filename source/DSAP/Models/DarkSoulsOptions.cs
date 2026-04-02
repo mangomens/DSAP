@@ -26,6 +26,8 @@ namespace DSAP.Models
         public bool NoWeaponRequirements { get; set; }
         public bool NoSpellStatRequirements { get; set; }
         public bool NoMiracleCovenantRequirements { get; set; }
+        // shop
+        public bool ShopSanity { get; set; }
         // weapon upgrades
         public uint UpgradedWeaponsPercentage { get; set; }
         public List<String> UpgradedWeaponsAllowedInfusionTypes { get; set; } = [];
@@ -95,6 +97,9 @@ namespace DSAP.Models
                 apiver_build    = 1;
                 outofdate = true;
             }
+
+            // Shop sanity
+            ShopSanity = GetBool("shop_sanity");
 
             // Equipment options group start
             RandomizeStartingLoadouts = GetBool("randomize_starting_loadouts");

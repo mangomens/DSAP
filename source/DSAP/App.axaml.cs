@@ -50,6 +50,7 @@ public partial class App : Application
     // 
     private static Dictionary<long, ScoutedItemInfo> scoutedLocationInfo = [];
     private static Dictionary<int, ItemLot> ItemLotReplacementMap = new Dictionary<int, ItemLot>();
+    private static Dictionary<int, ShopReplacement> ShopReplacementMap = new Dictionary<int, ShopReplacement>();
     private static Dictionary<string, Tuple<int, string>> SlotLocToItemUpgMap = [];
     // Logging
     private static readonly object _lockObject = new object();
@@ -103,6 +104,8 @@ public partial class App : Application
     public void Start()
     {
         Context = new MainWindowViewModel("0.6.2 - 0.6.5");
+        Context.Host = "localhost";
+        Context.Slot = "Test1";
         
         Context.ClientVersion = Assembly.GetEntryAssembly().GetName().Version.ToString();
         Context.ConnectClicked += Context_ConnectClicked;
@@ -135,6 +138,8 @@ public partial class App : Application
             Log.Logger.Warning("--- Informational --- ");
             Log.Logger.Warning(" /help - Display this menu.");
             Log.Logger.Warning(" /diag - Print out some diagnostic information.");
+            Log.Logger.Warning(" /shopdiag - Dump shop param memory state to Documents/DSAP/ for analysis.");
+            Log.Logger.Warning(" /paraminfo - Dump param table metadata and MsgMan offsets for analysis.");
             Log.Logger.Warning(" /lock [Locked/Unlocked/All] - Display list of all locked or unlocked lockable events, or status of all of them (default).");
             Log.Logger.Warning(" /fog [Locked/Unlocked/All] - Display list of locked or unlocked fog walls, or status of all of them (default).");
             Log.Logger.Warning(" /bossfog [Locked/Unlocked/All] - Display list of locked or unlocked boss fog walls, or status of all of them (default).");
@@ -346,6 +351,141 @@ public partial class App : Application
         else if (command.StartsWith("/goalcheck")) // check for goal conditions and print a bunch of diagnostics and values.
         {
             GoalCheck();
+        }
+        else if (command.StartsWith("/paraminfo")) // dump param table metadata
+        {
+            if (!Client.IsConnected || !MiscHelper.IsInGame())
+            {
+                Log.Logger.Warning("Must be connected and in-game to run /paraminfo.");
+                return;
+            }
+            try
+            {
+                Log.Logger.Warning("Running /paraminfo...");
+                ShopHelper.DumpParamInfo();
+                Log.Logger.Warning("/paraminfo completed.");
+            }
+            catch (Exception ex)
+            {
+                Log.Logger.Error($"/paraminfo crashed: {ex}");
+            }
+        }
+        else if (command.StartsWith("/goodstype")) // dump goodsType analysis
+        {
+            if (!Client.IsConnected || !MiscHelper.IsInGame())
+            {
+                Log.Logger.Warning("Must be connected and in-game to run /goodstype.");
+                return;
+            }
+            try
+            {
+                Log.Logger.Warning("Running /goodstype...");
+                ShopHelper.DumpGoodsTypeAnalysis();
+                Log.Logger.Warning("/goodstype completed.");
+            }
+            catch (Exception ex)
+            {
+                Log.Logger.Error($"/goodstype crashed: {ex}");
+            }
+        }
+        else if (command.StartsWith("/shopflags")) // dump event flag bit states for all shop purchase flags
+        {
+            if (!Client.IsConnected || !MiscHelper.IsInGame())
+            {
+                Log.Logger.Warning("Must be connected and in-game to run /shopflags.");
+                return;
+            }
+            try
+            {
+                Log.Logger.Warning("Running /shopflags...");
+                ShopHelper.DumpShopEventFlags();
+                Log.Logger.Warning("/shopflags completed.");
+            }
+            catch (Exception ex)
+            {
+                Log.Logger.Error($"/shopflags crashed: {ex}");
+            }
+        }
+        else if (command.StartsWith("/shopraw")) // dump raw ShopLineupParam bytes
+        {
+            if (!Client.IsConnected || !MiscHelper.IsInGame())
+            {
+                Log.Logger.Warning("Must be connected and in-game to run /shopraw.");
+                return;
+            }
+            try
+            {
+                Log.Logger.Warning("Running /shopraw...");
+                ShopHelper.DumpShopRawBytes();
+                Log.Logger.Warning("/shopraw completed.");
+            }
+            catch (Exception ex)
+            {
+                Log.Logger.Error($"/shopraw crashed: {ex}");
+            }
+        }
+        else if (command.StartsWith("/shopdiag")) // dump shop param state to file
+        {
+            if (!Client.IsConnected || !MiscHelper.IsInGame())
+            {
+                Log.Logger.Warning("Must be connected and in-game to run /shopdiag.");
+                return;
+            }
+            ShopHelper.DumpShopDiagnostics(ShopReplacementMap);
+        }
+        else if (command.StartsWith("/shopstruct")) // deep structural verification
+        {
+            if (!Client.IsConnected || !MiscHelper.IsInGame())
+            {
+                Log.Logger.Warning("Must be connected and in-game to run /shopstruct.");
+                return;
+            }
+            try
+            {
+                Log.Logger.Warning("Running /shopstruct...");
+                ShopHelper.DumpShopStructure();
+                Log.Logger.Warning("/shopstruct completed.");
+            }
+            catch (Exception ex)
+            {
+                Log.Logger.Error($"/shopstruct crashed: {ex}");
+            }
+        }
+        else if (command.StartsWith("/shopvis")) // check item resolution in equip params
+        {
+            if (!Client.IsConnected || !MiscHelper.IsInGame())
+            {
+                Log.Logger.Warning("Must be connected and in-game to run /shopvis.");
+                return;
+            }
+            try
+            {
+                Log.Logger.Warning("Running /shopvis...");
+                ShopHelper.DumpShopVisibility();
+                Log.Logger.Warning("/shopvis completed.");
+            }
+            catch (Exception ex)
+            {
+                Log.Logger.Error($"/shopvis crashed: {ex}");
+            }
+        }
+        else if (command.StartsWith("/shopvanilla")) // compare vanilla vs modified params
+        {
+            if (!Client.IsConnected || !MiscHelper.IsInGame())
+            {
+                Log.Logger.Warning("Must be connected and in-game to run /shopvanilla.");
+                return;
+            }
+            try
+            {
+                Log.Logger.Warning("Running /shopvanilla...");
+                ShopHelper.DumpVanillaComparison();
+                Log.Logger.Warning("/shopvanilla completed.");
+            }
+            catch (Exception ex)
+            {
+                Log.Logger.Error($"/shopvanilla crashed: {ex}");
+            }
         }
         else if (command.StartsWith("/diag")) // print diagnostic info
         {
@@ -853,6 +993,11 @@ public partial class App : Application
             var miscLocations = LocationHelper.GetMiscFlagLocations();
 
             var fullLocationsList = bossLocations.Union(itemLocations).Union(bonfireLocations).Union(doorLocations).Union(fogWallLocations).Union(miscLocations).ToList();
+            if (DSOptions.ShopSanity)
+            {
+                var shopLocations = LocationHelper.GetShopFlagLocations();
+                fullLocationsList = fullLocationsList.Union(shopLocations).ToList();
+            }
             Client.MonitorLocationsAsync(fullLocationsList);
 
             StartEmkWatchers(EmkControllers);
@@ -1648,6 +1793,7 @@ public partial class App : Application
     private static async void OnConnectedAsync(object sender, ConnectionChangedEventArgs args)
     {
         Log.Logger.Information("Connected to Archipelago");
+        Log.Logger.Warning("DSAP build: 2026-04-01-B");
         Client.AddOverlayMessage("Connected to Archipelago");
         Log.Logger.Information($"Playing {Client.CurrentSession.ConnectionInfo.Game} as {Client.CurrentSession.Players.GetPlayerName(Client.CurrentSession.ConnectionInfo.Slot)}");
         Client.AddOverlayMessage($"Playing {Client.CurrentSession.ConnectionInfo.Game} as {Client.CurrentSession.Players.GetPlayerName(Client.CurrentSession.ConnectionInfo.Slot)}");
@@ -1691,6 +1837,15 @@ public partial class App : Application
             await ApItemInjectorHelper.AddAPItems(scoutedLocationInfo);
 
             ItemLotHelper.BuildLotParamIdToLotMap(out ItemLotReplacementMap, SlotLocToItemUpgMap, scoutedLocationInfo);
+
+            if (DSOptions.ShopSanity)
+            {
+                ShopHelper.BuildShopReplacementMap(
+                    out ShopReplacementMap,
+                    scoutedLocationInfo,
+                    AllItemsByApId,
+                    Client.CurrentSession.ConnectionInfo.Slot);
+            }
         }
         ItemLotHelper.RandomizeStartingLoadouts();
         if (DSOptions.NoWeaponRequirements)
@@ -1700,6 +1855,12 @@ public partial class App : Application
 
         /* Set to only receive remote items and starting inventory */
         UpdateItemLots();
+        if (DSOptions.ShopSanity)
+        {
+            ShopHelper.UpdateShopLineupParams(ShopReplacementMap);
+            Log.Logger.Information("Shop randomization applied");
+            Client.AddOverlayMessage("Shop randomization applied");
+        }
         watch.Stop();
         Log.Logger.Information($"Finished setup, took {watch.ElapsedMilliseconds}ms total");
         Client.AddOverlayMessage($"Finished setup, took {watch.ElapsedMilliseconds}ms total");
@@ -1718,6 +1879,7 @@ public partial class App : Application
         SlotLocToItemUpgMap = [];
         EmkControllers = [];
         ItemLotReplacementMap = [];
+        ShopReplacementMap = [];
         scoutedLocationInfo = [];
     }
     private void OnGameDisconnected(object sender, EventArgs args)

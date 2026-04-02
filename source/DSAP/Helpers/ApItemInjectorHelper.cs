@@ -32,14 +32,42 @@ namespace DSAP.Helpers
             added_names.Sort((a, b) => a.Key.CompareTo(b.Key));
             added_captions.Sort((a, b) => a.Key.CompareTo(b.Key));
 
+            // Build shop equip type lookup from ShopFlags.json
+            var shopEquipTypes = LocationHelper.GetShopFlags()
+                .Where(x => x.IsEnabled)
+                .ToDictionary(x => (long)x.Id, x => x.VanillaEquipType);
+
+            // Partition shop items by vanilla equip type
+            var weaponNames = added_names.Where(x => shopEquipTypes.TryGetValue(x.Key, out var t) && t == 0).ToList();
+            var protectorNames = added_names.Where(x => shopEquipTypes.TryGetValue(x.Key, out var t) && t == 1).ToList();
+            var accessoryNames = added_names.Where(x => shopEquipTypes.TryGetValue(x.Key, out var t) && t == 2).ToList();
+
             var watch = System.Diagnostics.Stopwatch.StartNew();
 
-            // add items
+            // Create ALL items as EquipParamGoods stubs.
+            // Weapon/protector/accessory stubs disabled — they don't display in shops
+            // without working FMG text in their respective (inaccessible) FMG tables.
+            // TODO: Investigate why weapon/protector/accessory stubs are invisible in shop UI.
             bool do_replacements = upgradeGoods(added_names);
+            //if (weaponNames.Count > 0) upgradeWeapons(weaponNames);
+            //if (protectorNames.Count > 0) upgradeProtectors(protectorNames);
+            //if (accessoryNames.Count > 0) upgradeAccessories(accessoryNames);
 
+            // Write text to Goods FMGs (all items — weapon/protector FMGs not accessible)
             AddMsgs(MsgManStruct.OFFSET_ITEM_NAMES, added_names, "Item Names"); // names
             AddMsgs(MsgManStruct.OFFSET_ITEM_CAPTIONS, added_captions, "Item Captions"); // captions
             AddMsgs(MsgManStruct.OFFSET_ITEM_DESCRIPTIONS, added_captions, "Item Descriptions"); // info
+
+            // Write text to Accessory FMGs (for ring-type shop items)
+            if (accessoryNames.Count > 0)
+            {
+                var accessoryCaptions = added_captions.Where(x => shopEquipTypes.TryGetValue(x.Key, out var t) && t == 2).ToList();
+                AddMsgs(MsgManStruct.OFFSET_RING_NAMES, accessoryNames, "Ring Names");
+                AddMsgs(MsgManStruct.OFFSET_RING_CAPTIONS, accessoryCaptions, "Ring Captions");
+                AddMsgs(MsgManStruct.OFFSET_RING_DESCRIPTIONS, accessoryCaptions, "Ring Descriptions");
+            }
+
+            Log.Logger.Information($"Added param stubs: {added_names.Count} goods, {weaponNames.Count} weapons, {protectorNames.Count} protectors, {accessoryNames.Count} accessories");
             
             watch.Stop();
             Log.Logger.Information($"Finished adding new items params + msg text, took {watch.ElapsedMilliseconds}ms");
@@ -209,7 +237,7 @@ namespace DSAP.Helpers
                 //parambytes[0x1e] = idbytes[2];
                 //parambytes[0x1f] = idbytes[3];
                 byte[] iconbytes = BitConverter.GetBytes((short)2042);
-                parambytes[0x2c] = iconbytes[0]; // icon byte 0
+                parambytes[0x2c] = iconbytes[0]; // icon byte 0 (Prism Stone icon)
                 parambytes[0x2d] = iconbytes[1]; // icon byte 1
                 parambytes[0x45] |= (byte)(0x30); // turn on isDrop and isDeposit bits
                 // This will add the item to the array, and append its string to the NewString buffer
@@ -221,6 +249,98 @@ namespace DSAP.Helpers
             ParamHelper.WriteFromParamSt(paramStruct, EquipParamGoods.spOffset);
 
             return true;
+        }
+
+        private static void upgradeWeapons(List<KeyValuePair<long, string>> entries)
+        {
+            bool reloadRequired = ParamHelper.ReadFromBytes(out ParamStruct<EquipParamWeapon> paramStruct,
+                                                     EquipParamWeapon.spOffset,
+                                                     (ps) => ps.ParamEntries.Last().id >= 11110000);
+            if (!reloadRequired)
+            {
+                Log.Logger.Debug("Skipping reload of EquipParamWeapon");
+                return;
+            }
+
+            byte[] parambytes = new byte[EquipParamWeapon.Size];
+            Array.Copy(paramStruct.ParamBytes, paramStruct.ParamEntries[0].paramOffset, parambytes, 0, parambytes.Length);
+
+            for (int i = 0; i < entries.Count; i++)
+            {
+                var entry = entries[i];
+                uint newid = (uint)entry.Key;
+                byte[] stringbytes = Encoding.ASCII.GetBytes($"{entry.Value}\0");
+                // Set icon to Dagger (icon 1) at +0xBA
+                byte[] iconbytes = BitConverter.GetBytes((short)1);
+                parambytes[0xBA] = iconbytes[0];
+                parambytes[0xBB] = iconbytes[1];
+                paramStruct.AddParam(newid, parambytes, stringbytes);
+            }
+
+            Log.Logger.Information($"Added {entries.Count} weapon stubs to EquipParamWeapon");
+            ParamHelper.WriteFromParamSt(paramStruct, EquipParamWeapon.spOffset);
+        }
+
+        private static void upgradeProtectors(List<KeyValuePair<long, string>> entries)
+        {
+            bool reloadRequired = ParamHelper.ReadFromBytes(out ParamStruct<EquipParamProtector> paramStruct,
+                                                     EquipParamProtector.spOffset,
+                                                     (ps) => ps.ParamEntries.Last().id >= 11110000);
+            if (!reloadRequired)
+            {
+                Log.Logger.Debug("Skipping reload of EquipParamProtector");
+                return;
+            }
+
+            byte[] parambytes = new byte[EquipParamProtector.Size];
+            Array.Copy(paramStruct.ParamBytes, paramStruct.ParamEntries[0].paramOffset, parambytes, 0, parambytes.Length);
+
+            for (int i = 0; i < entries.Count; i++)
+            {
+                var entry = entries[i];
+                uint newid = (uint)entry.Key;
+                byte[] stringbytes = Encoding.ASCII.GetBytes($"{entry.Value}\0");
+                // Set iconIdM and iconIdF to Leather Armor (1052) at +0xA2/+0xA4
+                byte[] iconbytes = BitConverter.GetBytes((short)1052);
+                parambytes[0xA2] = iconbytes[0];
+                parambytes[0xA3] = iconbytes[1];
+                parambytes[0xA4] = iconbytes[0];
+                parambytes[0xA5] = iconbytes[1];
+                paramStruct.AddParam(newid, parambytes, stringbytes);
+            }
+
+            Log.Logger.Information($"Added {entries.Count} protector stubs to EquipParamProtector");
+            ParamHelper.WriteFromParamSt(paramStruct, EquipParamProtector.spOffset);
+        }
+
+        private static void upgradeAccessories(List<KeyValuePair<long, string>> entries)
+        {
+            bool reloadRequired = ParamHelper.ReadFromBytes(out ParamStruct<EquipParamAccessory> paramStruct,
+                                                     EquipParamAccessory.spOffset,
+                                                     (ps) => ps.ParamEntries.Last().id >= 11110000);
+            if (!reloadRequired)
+            {
+                Log.Logger.Debug("Skipping reload of EquipParamAccessory");
+                return;
+            }
+
+            byte[] parambytes = new byte[EquipParamAccessory.Size];
+            Array.Copy(paramStruct.ParamBytes, paramStruct.ParamEntries[0].paramOffset, parambytes, 0, parambytes.Length);
+
+            for (int i = 0; i < entries.Count; i++)
+            {
+                var entry = entries[i];
+                uint newid = (uint)entry.Key;
+                byte[] stringbytes = Encoding.ASCII.GetBytes($"{entry.Value}\0");
+                // Set icon to Ring of Sacrifice (4000) at +0x22
+                byte[] iconbytes = BitConverter.GetBytes((short)4000);
+                parambytes[0x22] = iconbytes[0];
+                parambytes[0x23] = iconbytes[1];
+                paramStruct.AddParam(newid, parambytes, stringbytes);
+            }
+
+            Log.Logger.Information($"Added {entries.Count} accessory stubs to EquipParamAccessory");
+            ParamHelper.WriteFromParamSt(paramStruct, EquipParamAccessory.spOffset);
         }
         internal static void AddMsgs(int msgManOffset, List<KeyValuePair<long, string>> instrings, string msgsName)
         {
@@ -265,7 +385,7 @@ namespace DSAP.Helpers
             Log.Logger.Information($"Wrote string {newptxt}");
         }
 
-        private static ulong FindMsg(ulong MsgsStart, uint id)
+        internal static ulong FindMsg(ulong MsgsStart, uint id)
         {
             ulong GoodsMsgsStrTableOffset = Memory.ReadULong(MsgsStart + 0x14);
             ushort GoodsMsgsCompareEntries = Memory.ReadUShort(MsgsStart + 0xc);
