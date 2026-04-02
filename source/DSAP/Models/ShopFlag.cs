@@ -7,6 +7,5 @@ namespace DSAP.Models
         public int Row { get; set; }
         public int PurchaseFlag { get; set; }
         public bool IsEnabled { get; set; }
-        public int VanillaEquipType { get; set; } = 3;
     }
 }
