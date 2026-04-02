@@ -51,6 +51,7 @@ public partial class App : Application
     private static Dictionary<long, ScoutedItemInfo> scoutedLocationInfo = [];
     private static Dictionary<int, ItemLot> ItemLotReplacementMap = new Dictionary<int, ItemLot>();
     private static Dictionary<int, ShopReplacement> ShopReplacementMap = new Dictionary<int, ShopReplacement>();
+    private static HashSet<long> NativeShopLocationIds = new HashSet<long>();
     private static Dictionary<string, Tuple<int, string>> SlotLocToItemUpgMap = [];
     // Logging
     private static readonly object _lockObject = new object();
@@ -1456,7 +1457,15 @@ public partial class App : Application
             }
 
             var itemId = e.Item.Id;
-            if (AllItemsByApId.TryGetValue((int)itemId, out var itemToReceive))
+
+            // Skip granting native shop items from our own slot — the shop already gave the real item
+            if (e.Player.Slot == Client.CurrentSession.ConnectionInfo.Slot
+                && NativeShopLocationIds.Contains(e.LocationId))
+            {
+                Log.Logger.Information($"Skipping native shop item grant (already obtained from shop): {e.Item.Name} from loc {e.LocationId}");
+                success = true;
+            }
+            else if (AllItemsByApId.TryGetValue((int)itemId, out var itemToReceive))
             {
                 Log.Logger.Information($"Received {itemToReceive.Name} ({itemToReceive.ApId})");
                 Client.AddOverlayMessage($"Received {itemToReceive.Name} ({itemToReceive.ApId})");
@@ -1842,6 +1851,7 @@ public partial class App : Application
             {
                 ShopHelper.BuildShopReplacementMap(
                     out ShopReplacementMap,
+                    out NativeShopLocationIds,
                     scoutedLocationInfo,
                     AllItemsByApId,
                     Client.CurrentSession.ConnectionInfo.Slot);
@@ -1880,6 +1890,7 @@ public partial class App : Application
         EmkControllers = [];
         ItemLotReplacementMap = [];
         ShopReplacementMap = [];
+        NativeShopLocationIds = [];
         scoutedLocationInfo = [];
     }
     private void OnGameDisconnected(object sender, EventArgs args)

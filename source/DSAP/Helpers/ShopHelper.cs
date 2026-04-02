@@ -21,11 +21,13 @@ namespace DSAP.Helpers
         /// </summary>
         public static void BuildShopReplacementMap(
             out Dictionary<int, ShopReplacement> resultMap,
+            out HashSet<long> nativeShopLocIds,
             Dictionary<long, ScoutedItemInfo> scoutedLocationInfo,
             Dictionary<int, DarkSoulsItem> allItemsByApId,
             int mySlot)
         {
             var result = new Dictionary<int, ShopReplacement>();
+            var nativeLocIds = new HashSet<long>();
             var shopFlags = LocationHelper.GetShopFlags()
                                          .Where(x => x.IsEnabled).ToList();
             int nativeCount = 0;
@@ -50,6 +52,7 @@ namespace DSAP.Helpers
                             ShopType = 0
                         };
                         nativeCount++;
+                        nativeLocIds.Add(locId);
                         Log.Logger.Verbose($"Shop replacement (native): row {shop.Row} -> {dsrItem.Name} (id={dsrItem.Id}, type={GetEquipType(dsrItem.Category)})");
                     }
                     else
@@ -70,6 +73,7 @@ namespace DSAP.Helpers
 
             Log.Logger.Information($"Built shop replacement map with {result.Count} entries ({nativeCount} native, {result.Count - nativeCount} stubs)");
             resultMap = result;
+            nativeShopLocIds = nativeLocIds;
         }
 
         private static bool IsPhysicalItemCategory(DSItemCategory category)
