@@ -13,81 +13,54 @@ namespace DSAP.Helpers
     {
         /// <summary>
         /// Build a mapping of ShopLineupParam row IDs to the AP location IDs
-        /// that should replace them. Native DSR items for the local player
-        /// use the real DSR equip ID and type; foreign items use AP stubs.
+        /// that should replace them. All items become AP stubs; equipType is
+        /// derived from the scouted item's category so the stub lands in the
+        /// correct shop tab and FMG table.
         /// </summary>
         public static void BuildShopReplacementMap(
             out Dictionary<int, ShopReplacement> resultMap,
-            out HashSet<long> nativeShopLocIds,
             Dictionary<long, ScoutedItemInfo> scoutedLocationInfo,
-            Dictionary<int, DarkSoulsItem> allItemsByApId,
-            int mySlot)
+            Dictionary<int, DarkSoulsItem> allItemsByApId)
         {
             var result = new Dictionary<int, ShopReplacement>();
-            var nativeLocIds = new HashSet<long>();
             var shopFlags = LocationHelper.GetShopFlags()
                                          .Where(x => x.IsEnabled).ToList();
-            int nativeCount = 0;
 
             foreach (var (locId, scoutedInfo) in scoutedLocationInfo)
             {
                 var matchingShopFlags = shopFlags.Where(x => x.Id == (int)locId);
                 foreach (var shop in matchingShopFlags)
                 {
-                    // Check if this is a native DSR item destined for us
-                    if (scoutedInfo.Player.Slot == mySlot
-                        && allItemsByApId.TryGetValue((int)scoutedInfo.ItemId, out var dsrItem)
-                        && IsPhysicalItemCategory(dsrItem.Category))
+                    int equipType = 3; // default to Goods for non-DSR items
+                    if (allItemsByApId.TryGetValue((int)scoutedInfo.ItemId, out var dsrItem))
+                        equipType = GetEquipType(dsrItem.Category);
+
+                    result[shop.Row] = new ShopReplacement
                     {
-                        result[shop.Row] = new ShopReplacement
-                        {
-                            EquipId = dsrItem.Id,
-                            EquipType = GetEquipType(dsrItem.Category),
-                            Value = 0,
-                            SellQuantity = 1,
-                            EventFlag = shop.PurchaseFlag,
-                            ShopType = 0
-                        };
-                        nativeCount++;
-                        nativeLocIds.Add(locId);
-                        Log.Logger.Verbose($"Shop replacement (native): row {shop.Row} -> {dsrItem.Name} (id={dsrItem.Id}, type={GetEquipType(dsrItem.Category)})");
-                    }
-                    else
-                    {
-                        result[shop.Row] = new ShopReplacement
-                        {
-                            EquipId = (int)locId,
-                            EquipType = 3,          // Goods — AP stub in EquipParamGoods
-                            Value = 0,
-                            SellQuantity = 1,
-                            EventFlag = shop.PurchaseFlag,
-                            ShopType = 0
-                        };
-                        Log.Logger.Verbose($"Shop replacement (stub): row {shop.Row} -> AP loc {locId} ({shop.Name})");
-                    }
+                        EquipId = (int)locId,
+                        EquipType = equipType,
+                        Value = 0,
+                        SellQuantity = 1,
+                        EventFlag = shop.PurchaseFlag,
+                        ShopType = 0
+                    };
+                    Log.Logger.Verbose($"Shop replacement: row {shop.Row} -> AP loc {locId} ({shop.Name}), equipType={equipType}");
                 }
             }
 
-            Log.Logger.Information($"Built shop replacement map with {result.Count} entries ({nativeCount} native, {result.Count - nativeCount} stubs)");
+            Log.Logger.Information($"Built shop replacement map with {result.Count} entries");
             resultMap = result;
-            nativeShopLocIds = nativeLocIds;
         }
 
-        private static bool IsPhysicalItemCategory(DSItemCategory category)
+        internal static int GetEquipType(DSItemCategory category)
         {
-            int val = (int)category;
-            return val == 0x00000000 || val == 0x10000000 ||
-                   val == 0x20000000 || val == 0x40000000;
-        }
-
-        private static int GetEquipType(DSItemCategory category)
-        {
+            // Only return a non-goods equipType for item types where we can also write the
+            // corresponding FMG entries. Without FMG text, DSR renders the shop slot as blank.
+            // Weapons (0) and protectors (1) fall back to goods until their FMG offsets are known.
             return (int)category switch
             {
-                0x00000000 => 0,  // weapon (melee, ranged, shields, spell tools)
-                0x10000000 => 1,  // protector (armor)
-                0x20000000 => 2,  // accessory (rings)
-                _ => 3            // goods (consumables, keys, spells, upgrade mats)
+                0x20000000 => 2,  // accessory (rings) — ring FMGs are accessible, full support
+                _ => 3            // everything else → goods stub + goods FMG (safe fallback)
             };
         }
 
