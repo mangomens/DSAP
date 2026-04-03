@@ -22,6 +22,7 @@ using ReactiveUI;
 using Serilog;
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
 using System.Reactive.Concurrency;
 using System.Reflection;
@@ -51,7 +52,6 @@ public partial class App : Application
     private static Dictionary<long, ScoutedItemInfo> scoutedLocationInfo = [];
     private static Dictionary<int, ItemLot> ItemLotReplacementMap = new Dictionary<int, ItemLot>();
     private static Dictionary<int, ShopReplacement> ShopReplacementMap = new Dictionary<int, ShopReplacement>();
-    private static HashSet<long> NativeShopLocationIds = new HashSet<long>();
     private static Dictionary<string, Tuple<int, string>> SlotLocToItemUpgMap = [];
     // Logging
     private static readonly object _lockObject = new object();
@@ -151,6 +151,11 @@ public partial class App : Application
             Log.Logger.Warning(" /warp [DLC/AP/FA] - warp to the DLC/Archives Prison/Firelink Altar if you've been locked out.");
             Log.Logger.Warning("--- Client Settings ---");
             Log.Logger.Warning(" /deathlink [on/off/toggle] - change your deathlink status (does not persist beyond current session).");
+            Log.Logger.Warning("--- Developer Tools ---");
+            Log.Logger.Warning(" /genmerchant <rowMin> <rowMax> <regionAbbrev> <merchantName> <nextLocId> <nextFlagIndex>");
+            Log.Logger.Warning("   Generate Locations.py + ShopFlags.json entries for a merchant's shop rows.");
+            Log.Logger.Warning("   Run while DSR is open but BEFORE connecting to AP (needs vanilla ShopLineupParam).");
+            Log.Logger.Warning("   Output: Documents\\DSAP\\merchant_gen_<name>_<timestamp>.txt");
             Log.Logger.Warning("--- End of DSAP commands. ---");
             Client?.SendMessage(a.Command); /* send original command through client for the rest of /help - maybe player will have something if they are an admin. */
         }
@@ -409,6 +414,77 @@ public partial class App : Application
         //{
         //    AddItemWithMessage((int)DSItemCategory.KeyItems, 11100970, 1);
         //}
+        else if (command.StartsWith("/genmerchant"))
+        {
+            // Usage: /genmerchant <rowMin> <rowMax> <regionAbbrev> <merchantName> <nextLocId> <nextFlagIndex>
+            // Run while DSR is open but BEFORE connecting to AP (vanilla ShopLineupParam state needed).
+            // nextFlagIndex is 0-based; current last index is 85 (flag 71812672), so next is 86.
+            string[] cmdparts = command.Split(" ");
+            if (cmdparts.Length != 7)
+            {
+                Log.Logger.Warning("Usage: /genmerchant <rowMin> <rowMax> <regionAbbrev> <merchantName> <nextLocId> <nextFlagIndex>");
+                Log.Logger.Warning("Example: /genmerchant 1600 1617 FS Patches 11114909 86");
+                Log.Logger.Warning("NOTE: Run before connecting to AP so ShopLineupParam is in vanilla state.");
+            }
+            else
+            {
+                int rowMin = int.Parse(cmdparts[1]);
+                int rowMax = int.Parse(cmdparts[2]);
+                string regionAbbrev = cmdparts[3];
+                string merchantName = cmdparts[4];
+                int nextLocId = int.Parse(cmdparts[5]);
+                int nextFlagIndex = int.Parse(cmdparts[6]);
+
+                ParamHelper.ReadFromBytes(out ParamStruct<ShopLineupParam> shopParam, ShopLineupParam.spOffset, (ps) => false);
+
+                var rows = shopParam.ParamEntries
+                    .Where(e => e.id >= rowMin && e.id <= rowMax)
+                    .OrderBy(e => e.id)
+                    .ToList();
+
+                if (rows.Count == 0)
+                {
+                    Log.Logger.Warning($"/genmerchant: No ShopLineupParam rows found in range [{rowMin}, {rowMax}]. Is DSR running?");
+                }
+                else
+                {
+                    var sbLocations = new StringBuilder();
+                    var sbShopFlags = new StringBuilder();
+                    sbLocations.AppendLine("# === Locations.py entries (paste into DSRLocationData list) ===");
+                    sbShopFlags.AppendLine("# === ShopFlags.json entries (append to ShopFlags array) ===");
+
+                    int locId = nextLocId;
+                    int flagIdx = nextFlagIndex;
+
+                    foreach (var entry in rows)
+                    {
+                        int offset = (int)entry.paramOffset;
+                        int equipId = BitConverter.ToInt32(shopParam.ParamBytes, offset + 0x0);
+                        byte equipType = shopParam.ParamBytes[offset + 0x17];
+
+                        var item = AllItems.FirstOrDefault(x => x.Id == equipId && ShopHelper.GetEquipType(x.Category) == equipType);
+                        string itemName = item?.Name ?? $"Unknown_{equipId}_t{equipType}";
+                        string locationName = $"{regionAbbrev}: {merchantName} - {itemName}";
+                        int purchaseFlag = 71810000 + (flagIdx / 32) * 1000 + (flagIdx % 32) * 32;
+
+                        sbLocations.AppendLine($"    DSRLocationData({locId}, \"{locationName}\", \"{itemName}\", DSRLocationCategory.SHOP_ITEM),");
+                        sbShopFlags.AppendLine($"    {{ \"Id\": {locId}, \"Name\": \"{locationName}\", \"Row\": {entry.id}, \"PurchaseFlag\": {purchaseFlag}, \"IsEnabled\": true }},");
+
+                        locId++;
+                        flagIdx++;
+                    }
+
+                    string outputDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "DSAP");
+                    Directory.CreateDirectory(outputDir);
+                    string timestamp = DateTime.Now.ToString("yyyyMMdd_HHmmss");
+                    string outputPath = Path.Combine(outputDir, $"merchant_gen_{merchantName}_{timestamp}.txt");
+
+                    File.WriteAllText(outputPath, sbLocations.ToString() + Environment.NewLine + sbShopFlags.ToString());
+                    Log.Logger.Information($"/genmerchant: Generated {rows.Count} entries for {merchantName} → {outputPath}");
+                    Log.Logger.Information($"/genmerchant: Next available LocationId={locId}, NextFlagIndex={flagIdx} (flag={71810000 + (flagIdx / 32) * 1000 + (flagIdx % 32) * 32})");
+                }
+            }
+        }
         else /* send any not-specifically-handled message to normal processing */
         {
             Client?.SendMessage(a.Command);
@@ -1321,14 +1397,7 @@ public partial class App : Application
 
             var itemId = e.Item.Id;
 
-            // Skip granting native shop items from our own slot — the shop already gave the real item
-            if (e.Player.Slot == Client.CurrentSession.ConnectionInfo.Slot
-                && NativeShopLocationIds.Contains(e.LocationId))
-            {
-                Log.Logger.Information($"Skipping native shop item grant (already obtained from shop): {e.Item.Name} from loc {e.LocationId}");
-                success = true;
-            }
-            else if (AllItemsByApId.TryGetValue((int)itemId, out var itemToReceive))
+            if (AllItemsByApId.TryGetValue((int)itemId, out var itemToReceive))
             {
                 Log.Logger.Information($"Received {itemToReceive.Name} ({itemToReceive.ApId})");
                 Client.AddOverlayMessage($"Received {itemToReceive.Name} ({itemToReceive.ApId})");
@@ -1714,10 +1783,8 @@ public partial class App : Application
             {
                 ShopHelper.BuildShopReplacementMap(
                     out ShopReplacementMap,
-                    out NativeShopLocationIds,
                     scoutedLocationInfo,
-                    AllItemsByApId,
-                    Client.CurrentSession.ConnectionInfo.Slot);
+                    AllItemsByApId);
             }
         }
         ItemLotHelper.RandomizeStartingLoadouts();
@@ -1753,7 +1820,6 @@ public partial class App : Application
         EmkControllers = [];
         ItemLotReplacementMap = [];
         ShopReplacementMap = [];
-        NativeShopLocationIds = [];
         scoutedLocationInfo = [];
     }
     private void OnGameDisconnected(object sender, EventArgs args)

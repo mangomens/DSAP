@@ -16,9 +16,14 @@ namespace DSAP.Helpers
         private static readonly object _memAllocLock = new object();
         internal static async Task AddAPItems(Dictionary<long, ScoutedItemInfo> scoutedLocationInfo)
         {
-            // Add all locations to pool, to "stub" out in-game items.
+            // Build set of shop location IDs so we can partition stubs for shop-specific param tables
+            var shopLocIds = new HashSet<long>(
+                LocationHelper.GetShopFlags()
+                              .Where(x => x.IsEnabled)
+                              .Select(x => (long)x.Id));
+
+            // All scouted entries — used for Goods stubs and Goods FMG (unchanged path)
             List<KeyValuePair<long, ScoutedItemInfo>> addedEntries = scoutedLocationInfo.ToList();
-            //addedEntries.Sort((a, b) => a.Key.CompareTo(b.Key));
 
             var added_names = addedEntries.Select(x => new KeyValuePair<long, string>(x.Key, $"{x.Value.Player}'s {x.Value.ItemDisplayName}\0")).ToList();
             var added_captions = addedEntries.Select(x => new KeyValuePair<long, string>(x.Key, BuildItemCaption(x))).ToList();
@@ -34,15 +39,142 @@ namespace DSAP.Helpers
 
             var watch = System.Diagnostics.Stopwatch.StartNew();
 
-            bool do_replacements = upgradeGoods(added_names);
+            // --- Goods stubs + Goods FMG (all items, unchanged) ---
+            bool do_replacements = upgradeGoods(added_names, scoutedLocationInfo);
 
-            // Write text to Goods FMGs (all items — weapon/protector FMGs not accessible)
-            AddMsgs(MsgManStruct.OFFSET_ITEM_NAMES, added_names, "Item Names"); // names
-            AddMsgs(MsgManStruct.OFFSET_ITEM_CAPTIONS, added_captions, "Item Captions"); // captions
-            AddMsgs(MsgManStruct.OFFSET_ITEM_DESCRIPTIONS, added_captions, "Item Descriptions"); // info
+            // Replace AP placeholder captions with vanilla goods captions for known DSR items.
+            // Read the vanilla FMG before we write to it.
+            ulong msgManPtrGoods = Memory.ReadULong(0x141c7e3e8);
+            ulong goodsCaptionFmgStart = Memory.ReadULong(msgManPtrGoods + (ulong)MsgManStruct.OFFSET_ITEM_CAPTIONS);
+            for (int i = 0; i < added_captions.Count; i++)
+            {
+                var entry = added_captions[i];
+                if (!scoutedLocationInfo.TryGetValue(entry.Key, out var si)) continue;
+                if (!App.AllItemsByApId.TryGetValue((int)si.ItemId, out var dsrItem)) continue;
+                ulong captionLoc = FindMsg(goodsCaptionFmgStart, (uint)dsrItem.Id);
+                if (captionLoc == 0) continue;
+                byte[] strBytes = Memory.ReadByteArray(captionLoc, 512);
+                string vanillaStr = Encoding.Unicode.GetString(strBytes).Split('\0')[0];
+                if (!string.IsNullOrWhiteSpace(vanillaStr))
+                    added_captions[i] = new KeyValuePair<long, string>(entry.Key, vanillaStr + "\0");
+            }
 
-            Log.Logger.Information($"Added param stubs: {added_names.Count} goods");
-            
+            // Write text to Goods FMGs for all items (weapon/protector FMGs not accessible through MsgMan)
+            AddMsgs(MsgManStruct.OFFSET_ITEM_NAMES, added_names, "Item Names");
+            AddMsgs(MsgManStruct.OFFSET_ITEM_CAPTIONS, added_captions, "Item Captions");
+            AddMsgs(MsgManStruct.OFFSET_ITEM_DESCRIPTIONS, added_captions, "Item Descriptions");
+
+            // --- Per-type stubs for shop items only ---
+            // Partition shop entries by the equipType of the scouted item so the stub lands in the
+            // correct param table, which DSR uses to determine shop tab and icon.
+            var weaponShopEntries    = new List<KeyValuePair<long, string>>();
+            //var weaponShopCaptions  = new List<KeyValuePair<long, string>>(); // uncomment when weapon FMG offsets are known
+            var protectorShopEntries = new List<KeyValuePair<long, string>>();
+            //var protectorShopCaptions = new List<KeyValuePair<long, string>>(); // uncomment when protector FMG offsets are known
+            var accessoryShopEntries = new List<KeyValuePair<long, string>>();
+            var accessoryShopCaptions = new List<KeyValuePair<long, string>>();
+            var accessoryRealEquipIds = new Dictionary<long, int>(); // locId → real DSR equip ID for icon + vanilla description lookup
+
+            foreach (var (locId, scoutedInfo) in scoutedLocationInfo)
+            {
+                if (!shopLocIds.Contains(locId)) continue;
+
+                int equipType = 3; // default goods
+                if (App.AllItemsByApId.TryGetValue((int)scoutedInfo.ItemId, out var dsrItem))
+                    equipType = ShopHelper.GetEquipType(dsrItem.Category);
+
+                string name    = $"{scoutedInfo.Player}'s {scoutedInfo.ItemDisplayName}\0";
+                string caption = BuildItemCaption(new KeyValuePair<long, ScoutedItemInfo>(locId, scoutedInfo));
+
+                switch (equipType)
+                {
+                    case 0:
+                        weaponShopEntries.Add(new KeyValuePair<long, string>(locId, name));
+                        //weaponShopCaptions.Add(new KeyValuePair<long, string>(locId, caption)); // uncomment when weapon FMG offsets are known
+                        break;
+                    case 1:
+                        protectorShopEntries.Add(new KeyValuePair<long, string>(locId, name));
+                        //protectorShopCaptions.Add(new KeyValuePair<long, string>(locId, caption)); // uncomment when protector FMG offsets are known
+                        break;
+                    case 2:
+                        accessoryShopEntries.Add(new KeyValuePair<long, string>(locId, name));
+                        accessoryShopCaptions.Add(new KeyValuePair<long, string>(locId, caption));
+                        if (dsrItem != null) accessoryRealEquipIds[locId] = dsrItem.Id;
+                        break;
+                    // case 3: goods — already handled above
+                }
+            }
+
+            weaponShopEntries.Sort((a, b) => a.Key.CompareTo(b.Key));
+            //weaponShopCaptions.Sort((a, b) => a.Key.CompareTo(b.Key)); // uncomment when weapon FMG offsets are known
+            protectorShopEntries.Sort((a, b) => a.Key.CompareTo(b.Key));
+            //protectorShopCaptions.Sort((a, b) => a.Key.CompareTo(b.Key)); // uncomment when protector FMG offsets are known
+            accessoryShopEntries.Sort((a, b) => a.Key.CompareTo(b.Key));
+            accessoryShopCaptions.Sort((a, b) => a.Key.CompareTo(b.Key));
+
+            if (weaponShopEntries.Count > 0)
+            {
+                upgradeWeapons(weaponShopEntries);
+                // TODO: add weapon FMG offset constants to MsgManStruct and uncomment:
+                //AddMsgs(MsgManStruct.OFFSET_WEAPON_NAMES,        weaponShopEntries,    "Weapon Names");
+                //AddMsgs(MsgManStruct.OFFSET_WEAPON_CAPTIONS,     weaponShopCaptions,   "Weapon Captions");
+                //AddMsgs(MsgManStruct.OFFSET_WEAPON_DESCRIPTIONS, weaponShopCaptions,   "Weapon Descriptions");
+            }
+            if (protectorShopEntries.Count > 0)
+            {
+                upgradeProtectors(protectorShopEntries);
+                // TODO: add protector FMG offset constants to MsgManStruct and uncomment:
+                //AddMsgs(MsgManStruct.OFFSET_ARMOR_NAMES,        protectorShopEntries,   "Armor Names");
+                //AddMsgs(MsgManStruct.OFFSET_ARMOR_CAPTIONS,     protectorShopCaptions,  "Armor Captions");
+                //AddMsgs(MsgManStruct.OFFSET_ARMOR_DESCRIPTIONS, protectorShopCaptions,  "Armor Descriptions");
+            }
+            if (accessoryShopEntries.Count > 0)
+            {
+                upgradeAccessories(accessoryShopEntries, accessoryRealEquipIds);
+
+                // Build ring captions and descriptions: use vanilla text for known DSR rings, AP caption otherwise.
+                // The shop info panel shows CAPTIONS (short one-liner). DESCRIPTIONS is shown in the inventory screen.
+                ulong msgManPtr = Memory.ReadULong(0x141c7e3e8);
+                ulong ringCaptionFmgStart = Memory.ReadULong(msgManPtr + (ulong)MsgManStruct.OFFSET_RING_CAPTIONS);
+                ulong ringDescFmgStart    = Memory.ReadULong(msgManPtr + (ulong)MsgManStruct.OFFSET_RING_DESCRIPTIONS);
+                var accessoryCaptionsWithVanilla = new List<KeyValuePair<long, string>>();
+                var accessoryShopDescriptions    = new List<KeyValuePair<long, string>>();
+                foreach (var entry in accessoryShopCaptions)
+                {
+                    string caption = entry.Value; // AP text fallback
+                    string desc    = entry.Value;
+                    if (accessoryRealEquipIds.TryGetValue(entry.Key, out int realEquipId))
+                    {
+                        ulong captionLoc = FindMsg(ringCaptionFmgStart, (uint)realEquipId);
+                        if (captionLoc != 0)
+                        {
+                            byte[] strBytes = Memory.ReadByteArray(captionLoc, 512);
+                            string vanillaStr = Encoding.Unicode.GetString(strBytes);
+                            caption = vanillaStr.Split('\0')[0] + "\0";
+                        }
+
+                        ulong descLoc = FindMsg(ringDescFmgStart, (uint)realEquipId);
+                        if (descLoc != 0)
+                        {
+                            byte[] strBytes = Memory.ReadByteArray(descLoc, 1024);
+                            string vanillaStr = Encoding.Unicode.GetString(strBytes);
+                            desc = vanillaStr.Split('\0')[0] + "\0";
+                        }
+                    }
+                    accessoryCaptionsWithVanilla.Add(new KeyValuePair<long, string>(entry.Key, caption));
+                    accessoryShopDescriptions.Add(new KeyValuePair<long, string>(entry.Key, desc));
+                }
+                accessoryCaptionsWithVanilla.Sort((a, b) => a.Key.CompareTo(b.Key));
+                accessoryShopDescriptions.Sort((a, b) => a.Key.CompareTo(b.Key));
+
+                // Ring FMGs are accessible — write names, captions, and descriptions
+                AddMsgs(MsgManStruct.OFFSET_RING_NAMES,        accessoryShopEntries,         "Ring Names");
+                AddMsgs(MsgManStruct.OFFSET_RING_CAPTIONS,     accessoryCaptionsWithVanilla, "Ring Captions");
+                AddMsgs(MsgManStruct.OFFSET_RING_DESCRIPTIONS, accessoryShopDescriptions,    "Ring Descriptions");
+            }
+
+            Log.Logger.Information($"Added param stubs: {added_names.Count} goods, {weaponShopEntries.Count} weapons, {protectorShopEntries.Count} protectors, {accessoryShopEntries.Count} accessories");
+
             watch.Stop();
             Log.Logger.Information($"Finished adding new items params + msg text, took {watch.ElapsedMilliseconds}ms");
             App.Client.AddOverlayMessage($"Finished adding new items params + msg text, took {watch.ElapsedMilliseconds}ms");
@@ -53,7 +185,6 @@ namespace DSAP.Helpers
             AddAPItemHook(scoutedLocationInfo.Min(x => x.Key), scoutedLocationInfo.Max(x => x.Key));
             // add item popup removal hook for all "location" items
             AddAPItemPopupHook(scoutedLocationInfo.Min(x => x.Key), scoutedLocationInfo.Max(x => x.Key));
-
         }
 
         private static void AddAPItemHook(long min, long max)
@@ -168,7 +299,115 @@ namespace DSAP.Helpers
         }
 
 
-        private static bool upgradeGoods(List<KeyValuePair<long, string>> addedEntries)
+        private static bool upgradeWeapons(List<KeyValuePair<long, string>> addedEntries)
+        {
+            bool reloadRequired = ParamHelper.ReadFromBytes(out ParamStruct<EquipParamWeapon> paramStruct,
+                                                     EquipParamWeapon.spOffset,
+                                                     (ps) => ps.ParamEntries.Last().id >= 11109961);
+            if (!reloadRequired)
+            {
+                Log.Logger.Debug("Skipping reload of EquipParamWeapon (shop stubs)");
+                return false;
+            }
+
+            // Copy a real weapon row as template (first entry)
+            byte[] parambytes = new byte[EquipParamWeapon.Size];
+            Array.Copy(paramStruct.ParamBytes, paramStruct.ParamEntries[0].paramOffset, parambytes, 0, parambytes.Length);
+
+            // Set icon to Dagger (1) at +0xBA (confirmed via Paramdex XML)
+            byte[] weaponIconBytes = BitConverter.GetBytes((short)1);
+            parambytes[0xBA] = weaponIconBytes[0];
+            parambytes[0xBB] = weaponIconBytes[1];
+
+            foreach (var entry in addedEntries)
+            {
+                byte[] stringbytes = Encoding.ASCII.GetBytes($"{entry.Value}\0");
+                paramStruct.AddParam((uint)entry.Key, parambytes, stringbytes);
+            }
+
+            Log.Logger.Information($"Added {addedEntries.Count} weapon shop stubs to EquipParamWeapon");
+            ParamHelper.WriteFromParamSt(paramStruct, EquipParamWeapon.spOffset);
+            return true;
+        }
+
+        private static bool upgradeProtectors(List<KeyValuePair<long, string>> addedEntries)
+        {
+            bool reloadRequired = ParamHelper.ReadFromBytes(out ParamStruct<EquipParamProtector> paramStruct,
+                                                     EquipParamProtector.spOffset,
+                                                     (ps) => ps.ParamEntries.Last().id >= 11109961);
+            if (!reloadRequired)
+            {
+                Log.Logger.Debug("Skipping reload of EquipParamProtector (shop stubs)");
+                return false;
+            }
+
+            // Copy a real protector row as template (first entry)
+            byte[] parambytes = new byte[EquipParamProtector.Size];
+            Array.Copy(paramStruct.ParamBytes, paramStruct.ParamEntries[0].paramOffset, parambytes, 0, parambytes.Length);
+
+            // Set iconIdM and iconIdF to Leather Armor (1052) at +0xA2/+0xA4 (confirmed via Paramdex XML)
+            byte[] protectorIconBytes = BitConverter.GetBytes((short)1052);
+            parambytes[0xA2] = protectorIconBytes[0];
+            parambytes[0xA3] = protectorIconBytes[1];
+            parambytes[0xA4] = protectorIconBytes[0];
+            parambytes[0xA5] = protectorIconBytes[1];
+
+            foreach (var entry in addedEntries)
+            {
+                byte[] stringbytes = Encoding.ASCII.GetBytes($"{entry.Value}\0");
+                paramStruct.AddParam((uint)entry.Key, parambytes, stringbytes);
+            }
+
+            Log.Logger.Information($"Added {addedEntries.Count} protector shop stubs to EquipParamProtector");
+            ParamHelper.WriteFromParamSt(paramStruct, EquipParamProtector.spOffset);
+            return true;
+        }
+
+        private static bool upgradeAccessories(List<KeyValuePair<long, string>> addedEntries, Dictionary<long, int> realEquipIds)
+        {
+            bool reloadRequired = ParamHelper.ReadFromBytes(out ParamStruct<EquipParamAccessory> paramStruct,
+                                                     EquipParamAccessory.spOffset,
+                                                     (ps) => ps.ParamEntries.Last().id >= 11109961);
+            if (!reloadRequired)
+            {
+                Log.Logger.Debug("Skipping reload of EquipParamAccessory (shop stubs)");
+                return false;
+            }
+
+            // Copy a real accessory row as template (first entry)
+            byte[] templateBytes = new byte[EquipParamAccessory.Size];
+            Array.Copy(paramStruct.ParamBytes, paramStruct.ParamEntries[0].paramOffset, templateBytes, 0, templateBytes.Length);
+
+            // Default fallback icon: Ring of Sacrifice (4000) at +0x22 (confirmed via Paramdex XML)
+            byte[] defaultIconBytes = BitConverter.GetBytes((short)4000);
+            templateBytes[0x22] = defaultIconBytes[0];
+            templateBytes[0x23] = defaultIconBytes[1];
+
+            foreach (var entry in addedEntries)
+            {
+                byte[] parambytes = (byte[])templateBytes.Clone();
+
+                // Use the real ring's icon if we know which DSR ring this stub represents
+                if (realEquipIds.TryGetValue(entry.Key, out int realEquipId))
+                {
+                    var realEntry = paramStruct.ParamEntries.FirstOrDefault(e => e.id == (uint)realEquipId);
+                    if (realEntry.id == (uint)realEquipId)
+                    {
+                        parambytes[0x22] = paramStruct.ParamBytes[(int)realEntry.paramOffset + 0x22];
+                        parambytes[0x23] = paramStruct.ParamBytes[(int)realEntry.paramOffset + 0x23];
+                    }
+                }
+
+                byte[] stringbytes = Encoding.ASCII.GetBytes($"{entry.Value}\0");
+                paramStruct.AddParam((uint)entry.Key, parambytes, stringbytes);
+            }
+
+            Log.Logger.Information($"Added {addedEntries.Count} accessory shop stubs to EquipParamAccessory");
+            ParamHelper.WriteFromParamSt(paramStruct, EquipParamAccessory.spOffset);
+            return true;
+        }
+
+        private static bool upgradeGoods(List<KeyValuePair<long, string>> addedEntries, Dictionary<long, ScoutedItemInfo> scoutedLocationInfo)
         {
             // Read in the Param Structure
             // Modify it,
@@ -192,11 +431,21 @@ namespace DSAP.Helpers
             Array.Copy(paramStruct.ParamBytes, paramStruct.ParamEntries[0].paramOffset, parambytes, 0, parambytes.Length);
 
             parambytes[0x36] = 99; // max num
-            parambytes[0x3a] = 1; // goods type = key
-            parambytes[0x3b] = 0; // ref category = like key
+            parambytes[0x3b] = 0; // ref category
             parambytes[0x3e] = 0; // use animation = 0
                                   // Is Only One?
                                   // Is Deposit?
+
+            // Build vanilla goodsType and icon lookups from original entries BEFORE the loop.
+            // We must not search ParamEntries inside the loop because AddParam() grows that list,
+            // and a stub entry's paramOffset points past ParamBytes — causing IndexOutOfRangeException.
+            var vanillaGoodsType = new Dictionary<uint, byte>();
+            var vanillaIcon = new Dictionary<uint, short>();
+            foreach (var ve in paramStruct.ParamEntries)
+            {
+                vanillaGoodsType[ve.id] = paramStruct.ParamBytes[(int)ve.paramOffset + 0x3A];
+                vanillaIcon[ve.id] = BitConverter.ToInt16(paramStruct.ParamBytes, (int)ve.paramOffset + 0x2C);
+            }
 
             // For each new item, "Add Item" to ParamSt
             for (uint i = 0; i < new_entries; i++)
@@ -210,10 +459,26 @@ namespace DSAP.Helpers
                 parambytes[0x1d] = idbytes[1]; // sort byte 1
                 //parambytes[0x1e] = idbytes[2];
                 //parambytes[0x1f] = idbytes[3];
-                byte[] iconbytes = BitConverter.GetBytes((short)2042);
-                parambytes[0x2c] = iconbytes[0]; // icon byte 0 (Prism Stone icon)
-                parambytes[0x2d] = iconbytes[1]; // icon byte 1
                 parambytes[0x45] |= (byte)(0x30); // turn on isDrop and isDeposit bits
+
+                // Look up goodsType (+0x3A) and icon (+0x2C) from the vanilla EquipParamGoods row.
+                // Falls back to Prism Stone icon + key items tab for foreign-world items or anything
+                // not present in EquipParamGoods (weapons/armor/rings used as goods stubs, etc.).
+                byte goodsType = 1;
+                short icon = 2042; // Prism Stone fallback
+                if (scoutedLocationInfo.TryGetValue((long)newid, out var scoutedInfo) &&
+                    App.AllItemsByApId.TryGetValue((int)scoutedInfo.ItemId, out var dsrItem))
+                {
+                    if (vanillaGoodsType.TryGetValue((uint)dsrItem.Id, out byte vanillaType))
+                        goodsType = vanillaType;
+                    if (vanillaIcon.TryGetValue((uint)dsrItem.Id, out short vanillaIconVal))
+                        icon = vanillaIconVal;
+                }
+                parambytes[0x3a] = goodsType;
+                byte[] iconbytes = BitConverter.GetBytes(icon);
+                parambytes[0x2c] = iconbytes[0];
+                parambytes[0x2d] = iconbytes[1];
+
                 // This will add the item to the array, and append its string to the NewString buffer
                 paramStruct.AddParam(newid, parambytes, stringbytes);
             }
