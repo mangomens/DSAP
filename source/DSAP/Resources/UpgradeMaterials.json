@@ -117,14 +117,16 @@
     "StackLimit": 99,
     "UpgradeType": "None",
     "Category": "UpgradeMaterials",
+    "Quantity": 2,
     "ApId": 11115100
   },
   {
-    "Name": "Demon Titanite",
+    "Name": "Demon Titanite x2",
     "Id": 1120,
     "StackLimit": 99,
     "UpgradeType": "None",
     "Category": "UpgradeMaterials",
+    "Quantity": 2,
     "ApId": 11115101
   },
   {
@@ -133,6 +135,7 @@
     "StackLimit": 99,
     "UpgradeType": "None",
     "Category": "UpgradeMaterials",
+    "Quantity": 2,
     "ApId": 11115102
   }
 ]
