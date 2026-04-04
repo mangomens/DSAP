@@ -117,12 +117,14 @@ namespace DSAP.Helpers
             // Partition shop entries by the equipType of the scouted item so the stub lands in the
             // correct param table, which DSR uses to determine shop tab and icon.
             var weaponShopEntries    = new List<KeyValuePair<long, string>>();
-            //var weaponShopCaptions  = new List<KeyValuePair<long, string>>(); // uncomment when weapon FMG offsets are known
+            var weaponShopCaptions   = new List<KeyValuePair<long, string>>();
+            var weaponRealEquipIds   = new Dictionary<long, int>();
             var protectorShopEntries = new List<KeyValuePair<long, string>>();
-            //var protectorShopCaptions = new List<KeyValuePair<long, string>>(); // uncomment when protector FMG offsets are known
+            var protectorShopCaptions = new List<KeyValuePair<long, string>>();
+            var protectorRealEquipIds = new Dictionary<long, int>();
             var accessoryShopEntries = new List<KeyValuePair<long, string>>();
             var accessoryShopCaptions = new List<KeyValuePair<long, string>>();
-            var accessoryRealEquipIds = new Dictionary<long, int>(); // locId → real DSR equip ID for icon + vanilla description lookup
+            var accessoryRealEquipIds = new Dictionary<long, int>();
 
             foreach (var (locId, scoutedInfo) in scoutedLocationInfo)
             {
@@ -139,11 +141,13 @@ namespace DSAP.Helpers
                 {
                     case 0:
                         weaponShopEntries.Add(new KeyValuePair<long, string>(locId, name));
-                        //weaponShopCaptions.Add(new KeyValuePair<long, string>(locId, caption)); // uncomment when weapon FMG offsets are known
+                        weaponShopCaptions.Add(new KeyValuePair<long, string>(locId, caption));
+                        if (dsrItem != null) weaponRealEquipIds[locId] = dsrItem.Id;
                         break;
                     case 1:
                         protectorShopEntries.Add(new KeyValuePair<long, string>(locId, name));
-                        //protectorShopCaptions.Add(new KeyValuePair<long, string>(locId, caption)); // uncomment when protector FMG offsets are known
+                        protectorShopCaptions.Add(new KeyValuePair<long, string>(locId, caption));
+                        if (dsrItem != null) protectorRealEquipIds[locId] = dsrItem.Id;
                         break;
                     case 2:
                         accessoryShopEntries.Add(new KeyValuePair<long, string>(locId, name));
@@ -155,27 +159,97 @@ namespace DSAP.Helpers
             }
 
             weaponShopEntries.Sort((a, b) => a.Key.CompareTo(b.Key));
-            //weaponShopCaptions.Sort((a, b) => a.Key.CompareTo(b.Key)); // uncomment when weapon FMG offsets are known
+            weaponShopCaptions.Sort((a, b) => a.Key.CompareTo(b.Key));
             protectorShopEntries.Sort((a, b) => a.Key.CompareTo(b.Key));
-            //protectorShopCaptions.Sort((a, b) => a.Key.CompareTo(b.Key)); // uncomment when protector FMG offsets are known
+            protectorShopCaptions.Sort((a, b) => a.Key.CompareTo(b.Key));
             accessoryShopEntries.Sort((a, b) => a.Key.CompareTo(b.Key));
             accessoryShopCaptions.Sort((a, b) => a.Key.CompareTo(b.Key));
 
             if (weaponShopEntries.Count > 0)
             {
-                upgradeWeapons(weaponShopEntries);
-                // TODO: add weapon FMG offset constants to MsgManStruct and uncomment:
-                //AddMsgs(MsgManStruct.OFFSET_WEAPON_NAMES,        weaponShopEntries,    "Weapon Names");
-                //AddMsgs(MsgManStruct.OFFSET_WEAPON_CAPTIONS,     weaponShopCaptions,   "Weapon Captions");
-                //AddMsgs(MsgManStruct.OFFSET_WEAPON_DESCRIPTIONS, weaponShopCaptions,   "Weapon Descriptions");
+                upgradeWeapons(weaponShopEntries, weaponRealEquipIds);
+
+                // Build weapon captions and descriptions: use vanilla text for known DSR weapons, AP caption otherwise.
+                ulong msgManPtrWeapon = Memory.ReadULong(0x141c7e3e8);
+                ulong weaponCaptionFmgStart = Memory.ReadULong(msgManPtrWeapon + (ulong)MsgManStruct.OFFSET_WEAPON_CAPTIONS);
+                ulong weaponDescFmgStart    = Memory.ReadULong(msgManPtrWeapon + (ulong)MsgManStruct.OFFSET_WEAPON_DESCRIPTIONS);
+                var weaponCaptionsWithVanilla = new List<KeyValuePair<long, string>>();
+                var weaponShopDescriptions    = new List<KeyValuePair<long, string>>();
+                foreach (var entry in weaponShopCaptions)
+                {
+                    string caption = entry.Value;
+                    string desc    = entry.Value;
+                    if (weaponRealEquipIds.TryGetValue(entry.Key, out int realEquipId))
+                    {
+                        ulong captionLoc = FindMsg(weaponCaptionFmgStart, (uint)realEquipId);
+                        if (captionLoc != 0)
+                        {
+                            byte[] strBytes = Memory.ReadByteArray(captionLoc, 512);
+                            string vanillaStr = Encoding.Unicode.GetString(strBytes).Split('\0')[0];
+                            if (!string.IsNullOrWhiteSpace(vanillaStr))
+                                caption = vanillaStr + "\0";
+                        }
+                        ulong descLoc = FindMsg(weaponDescFmgStart, (uint)realEquipId);
+                        if (descLoc != 0)
+                        {
+                            byte[] strBytes = Memory.ReadByteArray(descLoc, 1024);
+                            string vanillaStr = Encoding.Unicode.GetString(strBytes).Split('\0')[0];
+                            if (!string.IsNullOrWhiteSpace(vanillaStr))
+                                desc = vanillaStr + "\0";
+                        }
+                    }
+                    weaponCaptionsWithVanilla.Add(new KeyValuePair<long, string>(entry.Key, caption));
+                    weaponShopDescriptions.Add(new KeyValuePair<long, string>(entry.Key, desc));
+                }
+                weaponCaptionsWithVanilla.Sort((a, b) => a.Key.CompareTo(b.Key));
+                weaponShopDescriptions.Sort((a, b) => a.Key.CompareTo(b.Key));
+
+                AddMsgs(MsgManStruct.OFFSET_WEAPON_NAMES,        weaponShopEntries,        "Weapon Names");
+                AddMsgs(MsgManStruct.OFFSET_WEAPON_CAPTIONS,     weaponCaptionsWithVanilla, "Weapon Captions");
+                AddMsgs(MsgManStruct.OFFSET_WEAPON_DESCRIPTIONS, weaponShopDescriptions,    "Weapon Descriptions");
             }
             if (protectorShopEntries.Count > 0)
             {
-                upgradeProtectors(protectorShopEntries);
-                // TODO: add protector FMG offset constants to MsgManStruct and uncomment:
-                //AddMsgs(MsgManStruct.OFFSET_ARMOR_NAMES,        protectorShopEntries,   "Armor Names");
-                //AddMsgs(MsgManStruct.OFFSET_ARMOR_CAPTIONS,     protectorShopCaptions,  "Armor Captions");
-                //AddMsgs(MsgManStruct.OFFSET_ARMOR_DESCRIPTIONS, protectorShopCaptions,  "Armor Descriptions");
+                upgradeProtectors(protectorShopEntries, protectorRealEquipIds);
+
+                // Build protector captions and descriptions: use vanilla text for known DSR armor, AP caption otherwise.
+                ulong msgManPtrArmor = Memory.ReadULong(0x141c7e3e8);
+                ulong armorCaptionFmgStart = Memory.ReadULong(msgManPtrArmor + (ulong)MsgManStruct.OFFSET_ARMOR_CAPTIONS);
+                ulong armorDescFmgStart    = Memory.ReadULong(msgManPtrArmor + (ulong)MsgManStruct.OFFSET_ARMOR_DESCRIPTIONS);
+                var armorCaptionsWithVanilla = new List<KeyValuePair<long, string>>();
+                var armorShopDescriptions    = new List<KeyValuePair<long, string>>();
+                foreach (var entry in protectorShopCaptions)
+                {
+                    string caption = entry.Value;
+                    string desc    = entry.Value;
+                    if (protectorRealEquipIds.TryGetValue(entry.Key, out int realEquipId))
+                    {
+                        ulong captionLoc = FindMsg(armorCaptionFmgStart, (uint)realEquipId);
+                        if (captionLoc != 0)
+                        {
+                            byte[] strBytes = Memory.ReadByteArray(captionLoc, 512);
+                            string vanillaStr = Encoding.Unicode.GetString(strBytes).Split('\0')[0];
+                            if (!string.IsNullOrWhiteSpace(vanillaStr))
+                                caption = vanillaStr + "\0";
+                        }
+                        ulong descLoc = FindMsg(armorDescFmgStart, (uint)realEquipId);
+                        if (descLoc != 0)
+                        {
+                            byte[] strBytes = Memory.ReadByteArray(descLoc, 1024);
+                            string vanillaStr = Encoding.Unicode.GetString(strBytes).Split('\0')[0];
+                            if (!string.IsNullOrWhiteSpace(vanillaStr))
+                                desc = vanillaStr + "\0";
+                        }
+                    }
+                    armorCaptionsWithVanilla.Add(new KeyValuePair<long, string>(entry.Key, caption));
+                    armorShopDescriptions.Add(new KeyValuePair<long, string>(entry.Key, desc));
+                }
+                armorCaptionsWithVanilla.Sort((a, b) => a.Key.CompareTo(b.Key));
+                armorShopDescriptions.Sort((a, b) => a.Key.CompareTo(b.Key));
+
+                AddMsgs(MsgManStruct.OFFSET_ARMOR_NAMES,        protectorShopEntries,      "Armor Names");
+                AddMsgs(MsgManStruct.OFFSET_ARMOR_CAPTIONS,     armorCaptionsWithVanilla,  "Armor Captions");
+                AddMsgs(MsgManStruct.OFFSET_ARMOR_DESCRIPTIONS, armorShopDescriptions,     "Armor Descriptions");
             }
             if (accessoryShopEntries.Count > 0)
             {
@@ -348,7 +422,7 @@ namespace DSAP.Helpers
         }
 
 
-        private static bool upgradeWeapons(List<KeyValuePair<long, string>> addedEntries)
+        private static bool upgradeWeapons(List<KeyValuePair<long, string>> addedEntries, Dictionary<long, int> realEquipIds)
         {
             bool reloadRequired = ParamHelper.ReadFromBytes(out ParamStruct<EquipParamWeapon> paramStruct,
                                                      EquipParamWeapon.spOffset,
@@ -360,26 +434,49 @@ namespace DSAP.Helpers
             }
 
             // Copy a real weapon row as template (first entry)
-            byte[] parambytes = new byte[EquipParamWeapon.Size];
-            Array.Copy(paramStruct.ParamBytes, paramStruct.ParamEntries[0].paramOffset, parambytes, 0, parambytes.Length);
+            byte[] templateBytes = new byte[EquipParamWeapon.Size];
+            Array.Copy(paramStruct.ParamBytes, paramStruct.ParamEntries[0].paramOffset, templateBytes, 0, templateBytes.Length);
 
-            // Set icon to Dagger (1) at +0xBA (confirmed via Paramdex XML)
-            byte[] weaponIconBytes = BitConverter.GetBytes((short)1);
-            parambytes[0xBA] = weaponIconBytes[0];
-            parambytes[0xBB] = weaponIconBytes[1];
+            // Default fallback icon: Dagger (1) at +0xBA (confirmed via Paramdex XML)
+            byte[] defaultIconBytes = BitConverter.GetBytes((short)1);
+            templateBytes[0xBA] = defaultIconBytes[0];
+            templateBytes[0xBB] = defaultIconBytes[1];
 
             foreach (var entry in addedEntries)
             {
+                byte[] parambytes;
+
+                // Copy the FULL real weapon's param row so DSR has correct equipModelId,
+                // weaponCategory, equipModelCategory, iconId, and all other rendering fields.
+                if (realEquipIds.TryGetValue(entry.Key, out int realEquipId))
+                {
+                    var realEntry = paramStruct.ParamEntries.FirstOrDefault(e => e.id == (uint)realEquipId);
+                    if (realEntry.id == (uint)realEquipId)
+                    {
+                        parambytes = new byte[EquipParamWeapon.Size];
+                        Array.Copy(paramStruct.ParamBytes, (int)realEntry.paramOffset, parambytes, 0, (int)EquipParamWeapon.Size);
+                    }
+                    else
+                    {
+                        parambytes = (byte[])templateBytes.Clone();
+                    }
+                }
+                else
+                {
+                    parambytes = (byte[])templateBytes.Clone();
+                }
+
                 byte[] stringbytes = Encoding.ASCII.GetBytes($"{entry.Value}\0");
                 paramStruct.AddParam((uint)entry.Key, parambytes, stringbytes);
             }
 
             Log.Logger.Information($"Added {addedEntries.Count} weapon shop stubs to EquipParamWeapon");
+            paramStruct.ParamEntries.Sort((x, y) => x.id.CompareTo(y.id));
             ParamHelper.WriteFromParamSt(paramStruct, EquipParamWeapon.spOffset);
             return true;
         }
 
-        private static bool upgradeProtectors(List<KeyValuePair<long, string>> addedEntries)
+        private static bool upgradeProtectors(List<KeyValuePair<long, string>> addedEntries, Dictionary<long, int> realEquipIds)
         {
             bool reloadRequired = ParamHelper.ReadFromBytes(out ParamStruct<EquipParamProtector> paramStruct,
                                                      EquipParamProtector.spOffset,
@@ -391,23 +488,46 @@ namespace DSAP.Helpers
             }
 
             // Copy a real protector row as template (first entry)
-            byte[] parambytes = new byte[EquipParamProtector.Size];
-            Array.Copy(paramStruct.ParamBytes, paramStruct.ParamEntries[0].paramOffset, parambytes, 0, parambytes.Length);
+            byte[] templateBytes = new byte[EquipParamProtector.Size];
+            Array.Copy(paramStruct.ParamBytes, paramStruct.ParamEntries[0].paramOffset, templateBytes, 0, templateBytes.Length);
 
-            // Set iconIdM and iconIdF to Leather Armor (1052) at +0xA2/+0xA4 (confirmed via Paramdex XML)
-            byte[] protectorIconBytes = BitConverter.GetBytes((short)1052);
-            parambytes[0xA2] = protectorIconBytes[0];
-            parambytes[0xA3] = protectorIconBytes[1];
-            parambytes[0xA4] = protectorIconBytes[0];
-            parambytes[0xA5] = protectorIconBytes[1];
+            // Default fallback icon: Leather Armor (1052) at +0xA2/+0xA4 (confirmed via Paramdex XML)
+            byte[] defaultIconBytes = BitConverter.GetBytes((short)1052);
+            templateBytes[0xA2] = defaultIconBytes[0];
+            templateBytes[0xA3] = defaultIconBytes[1];
+            templateBytes[0xA4] = defaultIconBytes[0];
+            templateBytes[0xA5] = defaultIconBytes[1];
 
             foreach (var entry in addedEntries)
             {
+                byte[] parambytes;
+
+                // Copy the FULL real armor's param row so DSR has correct equipModelId,
+                // protectorCategory, iconId, and all other rendering fields.
+                if (realEquipIds.TryGetValue(entry.Key, out int realEquipId))
+                {
+                    var realEntry = paramStruct.ParamEntries.FirstOrDefault(e => e.id == (uint)realEquipId);
+                    if (realEntry.id == (uint)realEquipId)
+                    {
+                        parambytes = new byte[EquipParamProtector.Size];
+                        Array.Copy(paramStruct.ParamBytes, (int)realEntry.paramOffset, parambytes, 0, (int)EquipParamProtector.Size);
+                    }
+                    else
+                    {
+                        parambytes = (byte[])templateBytes.Clone();
+                    }
+                }
+                else
+                {
+                    parambytes = (byte[])templateBytes.Clone();
+                }
+                
                 byte[] stringbytes = Encoding.ASCII.GetBytes($"{entry.Value}\0");
                 paramStruct.AddParam((uint)entry.Key, parambytes, stringbytes);
             }
 
             Log.Logger.Information($"Added {addedEntries.Count} protector shop stubs to EquipParamProtector");
+            paramStruct.ParamEntries.Sort((x, y) => x.id.CompareTo(y.id));
             ParamHelper.WriteFromParamSt(paramStruct, EquipParamProtector.spOffset);
             return true;
         }

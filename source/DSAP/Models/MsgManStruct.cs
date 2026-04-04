@@ -20,6 +20,12 @@ namespace DSAP.Models
         public const int OFFSET_RING_DESCRIPTIONS = 0x370;
         public const int OFFSET_SPELL_NAMES = 0x3B8;
         public const int OFFSET_SPELL_DESCRIPTIONS = 0x350;
+        public const int OFFSET_WEAPON_NAMES = 0x3A0;
+        public const int OFFSET_WEAPON_CAPTIONS = 0x398;
+        public const int OFFSET_WEAPON_DESCRIPTIONS = 0x358;
+        public const int OFFSET_ARMOR_NAMES = 0x3B0;
+        public const int OFFSET_ARMOR_CAPTIONS = 0x3A8;
+        public const int OFFSET_ARMOR_DESCRIPTIONS = 0x368;
         public int BufferSize { get; set; }
         public ulong BufferLoc { get; set; }
         public byte[] AllBytes { get; set; }
