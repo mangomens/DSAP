@@ -59,8 +59,10 @@ namespace DSAP.Helpers
             // Weapons (0) and protectors (1) fall back to goods until their FMG offsets are fixed.
             return (int)category switch
             {
-                0x20000000 => 2,  // accessory (rings) — ring FMGs are accessible, full support
-                _ => 3            // everything else → goods stub + goods FMG (safe fallback)
+                0x00000000 => 0,  // weapons (melee, ranged, shields, spell tools)
+                0x10000000 => 1,  // armor/protectors
+                0x20000000 => 2,  // accessory (rings)
+                _ => 3            // goods fallback
             };
         }
 
