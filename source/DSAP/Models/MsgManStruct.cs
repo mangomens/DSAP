@@ -18,6 +18,8 @@ namespace DSAP.Models
         public const int OFFSET_RING_NAMES = 0x390;
         public const int OFFSET_RING_CAPTIONS = 0x388;
         public const int OFFSET_RING_DESCRIPTIONS = 0x370;
+        public const int OFFSET_SPELL_NAMES = 0x3B8;
+        public const int OFFSET_SPELL_DESCRIPTIONS = 0x350;
         public int BufferSize { get; set; }
         public ulong BufferLoc { get; set; }
         public byte[] AllBytes { get; set; }

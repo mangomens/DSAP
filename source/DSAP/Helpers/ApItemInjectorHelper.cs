@@ -42,27 +42,76 @@ namespace DSAP.Helpers
             // --- Goods stubs + Goods FMG (all items, unchanged) ---
             bool do_replacements = upgradeGoods(added_names, scoutedLocationInfo);
 
-            // Replace AP placeholder captions with vanilla goods captions for known DSR items.
-            // Read the vanilla FMG before we write to it.
+             // Partition FMG text lists: spells use a separate MsgMan FMG (+0x3B8 names, +0x350 descriptions).
+            // DSR looks up spell-type goods in the spell FMG, not the goods FMG, so we must write to both.
+            var spell_names    = new List<KeyValuePair<long, string>>();
+            var spell_descs    = new List<KeyValuePair<long, string>>();
+            var goods_names    = new List<KeyValuePair<long, string>>();
+            var goods_captions = new List<KeyValuePair<long, string>>();
+
             ulong msgManPtrGoods = Memory.ReadULong(0x141c7e3e8);
             ulong goodsCaptionFmgStart = Memory.ReadULong(msgManPtrGoods + (ulong)MsgManStruct.OFFSET_ITEM_CAPTIONS);
-            for (int i = 0; i < added_captions.Count; i++)
+            ulong spellDescFmgStart    = Memory.ReadULong(msgManPtrGoods + (ulong)MsgManStruct.OFFSET_SPELL_DESCRIPTIONS);
+
+            for (int i = 0; i < added_names.Count; i++)
             {
-                var entry = added_captions[i];
-                if (!scoutedLocationInfo.TryGetValue(entry.Key, out var si)) continue;
-                if (!App.AllItemsByApId.TryGetValue((int)si.ItemId, out var dsrItem)) continue;
-                ulong captionLoc = FindMsg(goodsCaptionFmgStart, (uint)dsrItem.Id);
-                if (captionLoc == 0) continue;
-                byte[] strBytes = Memory.ReadByteArray(captionLoc, 512);
-                string vanillaStr = Encoding.Unicode.GetString(strBytes).Split('\0')[0];
-                if (!string.IsNullOrWhiteSpace(vanillaStr))
-                    added_captions[i] = new KeyValuePair<long, string>(entry.Key, vanillaStr + "\0");
+                var nameEntry    = added_names[i];
+                var captionEntry = added_captions[i];
+
+                // Check if this is a spell item
+                bool isSpell = scoutedLocationInfo.TryGetValue(nameEntry.Key, out var si) &&
+                               App.AllItemsByApId.TryGetValue((int)si.ItemId, out var dsrItemCheck) &&
+                               dsrItemCheck.SpellCategory != Enums.SpellCategory.None;
+
+                if (isSpell)
+                {
+                    // For spells: look up vanilla description from the spell description FMG
+                    string spellDesc = captionEntry.Value;
+                    if (si != null && App.AllItemsByApId.TryGetValue((int)si.ItemId, out var spellItem))
+                    {
+                        ulong descLoc = FindMsg(spellDescFmgStart, (uint)spellItem.Id);
+                        if (descLoc != 0)
+                        {
+                            byte[] strBytes = Memory.ReadByteArray(descLoc, 1024);
+                            string vanillaStr = Encoding.Unicode.GetString(strBytes).Split('\0')[0];
+                            if (!string.IsNullOrWhiteSpace(vanillaStr))
+                                spellDesc = vanillaStr + "\0";
+                        }
+                    }
+                    spell_names.Add(nameEntry);
+                    spell_descs.Add(new KeyValuePair<long, string>(captionEntry.Key, spellDesc));
+                }
+                else
+                {
+                    // For normal goods: replace caption with vanilla goods caption if available
+                    string caption = captionEntry.Value;
+                    if (si != null && App.AllItemsByApId.TryGetValue((int)si.ItemId, out var goodsItem))
+                    {
+                        ulong captionLoc = FindMsg(goodsCaptionFmgStart, (uint)goodsItem.Id);
+                        if (captionLoc != 0)
+                        {
+                            byte[] strBytes = Memory.ReadByteArray(captionLoc, 512);
+                            string vanillaStr = Encoding.Unicode.GetString(strBytes).Split('\0')[0];
+                            if (!string.IsNullOrWhiteSpace(vanillaStr))
+                                caption = vanillaStr + "\0";
+                        }
+                    }
+                    goods_names.Add(nameEntry);
+                    goods_captions.Add(new KeyValuePair<long, string>(captionEntry.Key, caption));
+                }
             }
 
-            // Write text to Goods FMGs for all items (weapon/protector FMGs not accessible through MsgMan)
-            AddMsgs(MsgManStruct.OFFSET_ITEM_NAMES, added_names, "Item Names");
-            AddMsgs(MsgManStruct.OFFSET_ITEM_CAPTIONS, added_captions, "Item Captions");
-            AddMsgs(MsgManStruct.OFFSET_ITEM_DESCRIPTIONS, added_captions, "Item Descriptions");
+            // Write text to Goods FMGs (non-spell items only)
+            AddMsgs(MsgManStruct.OFFSET_ITEM_NAMES,         goods_names,    "Item Names");
+            AddMsgs(MsgManStruct.OFFSET_ITEM_CAPTIONS,      goods_captions, "Item Captions");
+            AddMsgs(MsgManStruct.OFFSET_ITEM_DESCRIPTIONS,  goods_captions, "Item Descriptions");
+
+            // Write text to Spell FMGs (spell items only — DSR reads spell names/descriptions from here)
+            if (spell_names.Count > 0)
+            {
+                AddMsgs(MsgManStruct.OFFSET_SPELL_NAMES,        spell_names, "Spell Names");
+                AddMsgs(MsgManStruct.OFFSET_SPELL_DESCRIPTIONS, spell_descs, "Spell Descriptions");
+            }
 
             // --- Per-type stubs for shop items only ---
             // Partition shop entries by the equipType of the scouted item so the stub lands in the
@@ -387,15 +436,23 @@ namespace DSAP.Helpers
             {
                 byte[] parambytes = (byte[])templateBytes.Clone();
 
-                // Use the real ring's icon if we know which DSR ring this stub represents
+                // Copy the FULL real ring's param row for consistent rendering fields.
                 if (realEquipIds.TryGetValue(entry.Key, out int realEquipId))
                 {
                     var realEntry = paramStruct.ParamEntries.FirstOrDefault(e => e.id == (uint)realEquipId);
                     if (realEntry.id == (uint)realEquipId)
                     {
-                        parambytes[0x22] = paramStruct.ParamBytes[(int)realEntry.paramOffset + 0x22];
-                        parambytes[0x23] = paramStruct.ParamBytes[(int)realEntry.paramOffset + 0x23];
+                        parambytes = new byte[EquipParamAccessory.Size];
+                        Array.Copy(paramStruct.ParamBytes, (int)realEntry.paramOffset, parambytes, 0, (int)EquipParamAccessory.Size);
                     }
+                    else
+                    {
+                        parambytes = (byte[])templateBytes.Clone();
+                    }
+                }
+                else
+                {
+                    parambytes = (byte[])templateBytes.Clone();
                 }
 
                 byte[] stringbytes = Encoding.ASCII.GetBytes($"{entry.Value}\0");
@@ -403,6 +460,7 @@ namespace DSAP.Helpers
             }
 
             Log.Logger.Information($"Added {addedEntries.Count} accessory shop stubs to EquipParamAccessory");
+            paramStruct.ParamEntries.Sort((x, y) => x.id.CompareTo(y.id));
             ParamHelper.WriteFromParamSt(paramStruct, EquipParamAccessory.spOffset);
             return true;
         }
@@ -436,15 +494,17 @@ namespace DSAP.Helpers
                                   // Is Only One?
                                   // Is Deposit?
 
-            // Build vanilla goodsType and icon lookups from original entries BEFORE the loop.
+            // Build vanilla goodsType, icon, and magicId lookups from original entries BEFORE the loop.
             // We must not search ParamEntries inside the loop because AddParam() grows that list,
             // and a stub entry's paramOffset points past ParamBytes — causing IndexOutOfRangeException.
             var vanillaGoodsType = new Dictionary<uint, byte>();
             var vanillaIcon = new Dictionary<uint, short>();
+            var vanillaMagicId = new Dictionary<uint, int>();
             foreach (var ve in paramStruct.ParamEntries)
             {
                 vanillaGoodsType[ve.id] = paramStruct.ParamBytes[(int)ve.paramOffset + 0x3A];
                 vanillaIcon[ve.id] = BitConverter.ToInt16(paramStruct.ParamBytes, (int)ve.paramOffset + 0x2C);
+                vanillaMagicId[ve.id] = BitConverter.ToInt32(paramStruct.ParamBytes, (int)ve.paramOffset + 0x28);
             }
 
             // For each new item, "Add Item" to ParamSt
@@ -461,11 +521,12 @@ namespace DSAP.Helpers
                 //parambytes[0x1f] = idbytes[3];
                 parambytes[0x45] |= (byte)(0x30); // turn on isDrop and isDeposit bits
 
-                // Look up goodsType (+0x3A) and icon (+0x2C) from the vanilla EquipParamGoods row.
-                // Falls back to Prism Stone icon + key items tab for foreign-world items or anything
-                // not present in EquipParamGoods (weapons/armor/rings used as goods stubs, etc.).
+                // Look up goodsType (+0x3A), icon (+0x2C), and magicId (+0x28) from the vanilla
+                // EquipParamGoods row. Falls back to Prism Stone icon + key items tab for
+                // foreign-world items or anything not in EquipParamGoods.
                 byte goodsType = 1;
                 short icon = 2042; // Prism Stone fallback
+                int magicId = -1;  // default: no magic reference
                 if (scoutedLocationInfo.TryGetValue((long)newid, out var scoutedInfo) &&
                     App.AllItemsByApId.TryGetValue((int)scoutedInfo.ItemId, out var dsrItem))
                 {
@@ -473,18 +534,27 @@ namespace DSAP.Helpers
                         goodsType = vanillaType;
                     if (vanillaIcon.TryGetValue((uint)dsrItem.Id, out short vanillaIconVal))
                         icon = vanillaIconVal;
+                    // For spell items, copy the vanilla magicId so DSR's magic panel can resolve
+                    // the existing MagicParam entry (Uses, Slots, Type display correctly).
+                    if (vanillaMagicId.TryGetValue((uint)dsrItem.Id, out int vanillaMagic) && vanillaMagic != -1)
+                        magicId = vanillaMagic;
                 }
                 parambytes[0x3a] = goodsType;
                 byte[] iconbytes = BitConverter.GetBytes(icon);
                 parambytes[0x2c] = iconbytes[0];
                 parambytes[0x2d] = iconbytes[1];
+                byte[] magicIdBytes = BitConverter.GetBytes(magicId);
+                parambytes[0x28] = magicIdBytes[0];
+                parambytes[0x29] = magicIdBytes[1];
+                parambytes[0x2a] = magicIdBytes[2];
+                parambytes[0x2b] = magicIdBytes[3];
 
                 // This will add the item to the array, and append its string to the NewString buffer
                 paramStruct.AddParam(newid, parambytes, stringbytes);
             }
 
             Log.Logger.Information($"Added {new_entries} items to EquipParamGoods from {addedEntries.First().Key} to {addedEntries.Last().Key}");
-
+            paramStruct.ParamEntries.Sort((x, y) => x.id.CompareTo(y.id));
             ParamHelper.WriteFromParamSt(paramStruct, EquipParamGoods.spOffset);
 
             return true;

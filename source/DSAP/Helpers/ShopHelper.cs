@@ -56,7 +56,7 @@ namespace DSAP.Helpers
         {
             // Only return a non-goods equipType for item types where we can also write the
             // corresponding FMG entries. Without FMG text, DSR renders the shop slot as blank.
-            // Weapons (0) and protectors (1) fall back to goods until their FMG offsets are known.
+            // Weapons (0) and protectors (1) fall back to goods until their FMG offsets are fixed.
             return (int)category switch
             {
                 0x20000000 => 2,  // accessory (rings) — ring FMGs are accessible, full support
