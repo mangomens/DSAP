@@ -105,8 +105,6 @@ public partial class App : Application
     public void Start()
     {
         Context = new MainWindowViewModel("0.6.2 - 0.6.5");
-        Context.Host = "localhost";
-        Context.Slot = "Test1";
         
         Context.ClientVersion = Assembly.GetEntryAssembly().GetName().Version.ToString();
         Context.ConnectClicked += Context_ConnectClicked;
