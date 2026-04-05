@@ -180,7 +180,6 @@ namespace DSAP.Helpers
                         accessoryShopCaptions.Add(new KeyValuePair<long, string>(locId, caption));
                         if (dsrItem != null) accessoryRealEquipIds[locId] = dsrItem.Id;
                         break;
-                    // case 3: goods — already handled above
                 }
             }
 

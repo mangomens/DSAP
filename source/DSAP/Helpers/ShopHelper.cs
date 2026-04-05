@@ -61,24 +61,19 @@ namespace DSAP.Helpers
 
         internal static int GetEquipType(DSItemCategory category)
         {
-            // Only return a non-goods equipType for item types where we can also write the
-            // corresponding FMG entries. Without FMG text, DSR renders the shop slot as blank.
-            // Weapons (0) and protectors (1) fall back to goods until their FMG offsets are fixed.
             return (int)category switch
             {
-                0x00000000 => 0,  // weapons (melee, ranged, shields, spell tools)
-                0x10000000 => 1,  // armor/protectors
-                0x20000000 => 2,  // accessory (rings)
-                _ => 3            // goods fallback
+                0x00000000 => 0,  // weapons (melee, arrows, shields, staves, catalysts)
+                0x10000000 => 1,  // armor
+                0x20000000 => 2,  // rings
+                _ => 3            // else goods and fallback
             };
         }
 
         /// <summary>
         /// Overwrite ShopLineupParam rows in DSR memory with AP replacements.
         /// </summary>
-        public static void OverwriteShopParams(
-            ParamStruct<ShopLineupParam> paramStruct,
-            Dictionary<int, ShopReplacement> replacementMap)
+        public static void OverwriteShopParams(ParamStruct<ShopLineupParam> paramStruct, Dictionary<int, ShopReplacement> replacementMap)
         {
             int overwritten = 0;
 
