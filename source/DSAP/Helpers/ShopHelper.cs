@@ -13,9 +13,9 @@ namespace DSAP.Helpers
     {
         /// <summary>
         /// Build a mapping of ShopLineupParam row IDs to the AP location IDs
-        /// that should replace them. All items become AP stubs; equipType is
+        /// that should replace them. All shop items become AP stubs; equipType is
         /// derived from the scouted item's category so the stub lands in the
-        /// correct shop tab and FMG table.
+        /// correct shop tab and looks up data in the correct FMG table.
         /// </summary>
         public static void BuildShopReplacementMap(
             out Dictionary<int, ShopReplacement> resultMap,
@@ -23,13 +23,13 @@ namespace DSAP.Helpers
             Dictionary<int, DarkSoulsItem> allItemsByApId)
         {
             var result = new Dictionary<int, ShopReplacement>();
-            var shopFlags = LocationHelper.GetShopFlags()
+            var shopRows = LocationHelper.GetShopRows()
                                          .Where(x => x.IsEnabled).ToList();
 
             foreach (var (locId, scoutedInfo) in scoutedLocationInfo)
             {
-                var matchingShopFlags = shopFlags.Where(x => x.Id == (int)locId);
-                foreach (var shop in matchingShopFlags)
+                var matchingShopRows = shopRows.Where(x => x.Id == (int)locId);
+                foreach (var row in matchingShopRows)
                 {
                     int equipType = 3; // default to Goods for non-DSR items
                     if (allItemsByApId.TryGetValue((int)scoutedInfo.ItemId, out var dsrItem))
@@ -42,16 +42,16 @@ namespace DSAP.Helpers
                     else if (equipType == 1 && ApItemInjectorHelper.ProtectorAlignedEquipIds.TryGetValue(locId, out int pId))
                         equipId = pId;
 
-                    result[shop.Row] = new ShopReplacement
+                    result[row.RowNum] = new ShopReplacement
                     {
                         EquipId = equipId,
                         EquipType = equipType,
                         Value = 0,
                         SellQuantity = 1,
-                        EventFlag = shop.PurchaseFlag,
+                        EventFlag = row.PurchaseFlag,
                         ShopType = 0
                     };
-                    Log.Logger.Verbose($"Shop replacement: row {shop.Row} -> AP loc {locId} equipId={equipId} ({shop.Name}), equipType={equipType}");
+                    Log.Logger.Verbose($"Shop replacement: row {row.RowNum} -> AP loc {locId} equipId={equipId} ({row.Name}), equipType={equipType}");
                 }
             }
 
@@ -116,9 +116,6 @@ namespace DSAP.Helpers
             Log.Logger.Information($"{overwritten} shop items overwritten");
         }
 
-        /// <summary>
-        /// Full shop update pipeline: read → modify → write.
-        /// </summary>
         public static bool UpdateShopLineupParams(
             Dictionary<int, ShopReplacement> replacementMap)
         {
@@ -135,7 +132,7 @@ namespace DSAP.Helpers
 
             OverwriteShopParams(paramStruct, replacementMap);
 
-            // Add sentinel entry for reload detection
+            // add a dummy item at 99999998 so that we can know we've been here
             byte[] dummyBytes = new byte[ShopLineupParam.Size];
             paramStruct.AddParam(99999998, dummyBytes, Encoding.ASCII.GetBytes(""));
             paramStruct.ParamEntries.Sort((x, y) => x.id.CompareTo(y.id));

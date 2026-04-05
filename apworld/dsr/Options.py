@@ -190,8 +190,7 @@ class EnableDeathlinkOption(Toggle):
     display_name = "Enable Deathlink"
 
 class ShopSanity(Toggle):
-    """Randomizes items sold by merchants. Each shop item becomes an AP location.
-    When enabled, merchant inventories are replaced with AP checks."""
+    """Randomizes items sold by merchants."""
     display_name = "Shop Sanity"
 
 

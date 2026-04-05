@@ -407,31 +407,6 @@ public partial class App : Application
         //{
         //    AddItemWithMessage((int)DSItemCategory.KeyItems, 11100970, 1);
         //}
-        else if (command.StartsWith("/savelog"))
-        {
-            string timestamp = DateTime.Now.ToString("yyyyMMdd_HHmmss");
-            string logPath = $"dsap_log_{timestamp}.txt";
-            try
-            {
-                // Flush current logger, create a file copy, then restore
-                var oldLogger = Log.Logger;
-                var fileLogger = new LoggerConfiguration()
-                    .MinimumLevel.Verbose()
-                    .WriteTo.File(logPath,
-                        outputTemplate: "{Timestamp:yyyy-MM-dd HH:mm:ss.fff zzz} [{Level:u3}] {Message:lj}{NewLine}{Exception}")
-                    .CreateLogger();
-                Log.Logger = fileLogger;
-                Log.Logger.Information("=== Log saved via /savelog command ===");
-                Log.CloseAndFlush();
-                Log.Logger = oldLogger;
-                Log.Logger.Warning($"Note: /savelog only captures messages AFTER this point. For full logs, set DEBUG_TXTLOG=true and reconnect.");
-                Log.Logger.Information($"Log marker saved to: {logPath}");
-            }
-            catch (Exception ex)
-            {
-                Log.Logger.Error($"Failed to save log: {ex.Message}");
-            }
-        }
         else /* send any not-specifically-handled message to normal processing */
         {
             Client?.SendMessage(a.Command);
@@ -882,7 +857,7 @@ public partial class App : Application
             var fullLocationsList = bossLocations.Union(itemLocations).Union(bonfireLocations).Union(doorLocations).Union(fogWallLocations).Union(miscLocations).ToList();
             if (DSOptions.ShopSanity)
             {
-                var shopLocations = LocationHelper.GetShopFlagLocations();
+                var shopLocations = LocationHelper.GetShopRowLocations();
                 fullLocationsList = fullLocationsList.Union(shopLocations).ToList();
             }
             Client.MonitorLocationsAsync(fullLocationsList);

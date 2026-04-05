@@ -26,14 +26,16 @@ namespace DSAP.Helpers
         private const int PROTECTOR_ALIGNED_STRIDE = 1000;
         internal static async Task AddAPItems(Dictionary<long, ScoutedItemInfo> scoutedLocationInfo)
         {
+            // Add all locations to pool, to "stub" out in-game items.
+
             // Build set of shop location IDs so we can partition stubs for shop-specific param tables
             var shopLocIds = new HashSet<long>(
-                LocationHelper.GetShopFlags()
+                LocationHelper.GetShopRows()
                               .Where(x => x.IsEnabled)
                               .Select(x => (long)x.Id));
 
-            // All scouted entries — used for Goods stubs and Goods FMG (unchanged path)
             List<KeyValuePair<long, ScoutedItemInfo>> addedEntries = scoutedLocationInfo.ToList();
+            //addedEntries.Sort((a, b) => a.Key.CompareTo(b.Key));
 
             var added_names = addedEntries.Select(x => new KeyValuePair<long, string>(x.Key, $"{x.Value.Player}'s {x.Value.ItemDisplayName}\0")).ToList();
             var added_captions = addedEntries.Select(x => new KeyValuePair<long, string>(x.Key, BuildItemCaption(x))).ToList();
@@ -49,12 +51,10 @@ namespace DSAP.Helpers
 
             var watch = System.Diagnostics.Stopwatch.StartNew();
 
-            // --- Goods stubs + Goods FMG (all items, unchanged) ---
+            // add items
             bool do_replacements = upgradeGoods(added_names, scoutedLocationInfo);
 
-             // Partition FMG text lists: spells use a separate MsgMan FMG (+0x3B8 names, +0x350 descriptions).
-            // DSR looks up spell-type goods in the spell FMG, not the goods FMG, so we must write to both.
-            // DSR keys spell FMG lookups by the magicId from EquipParamGoods, NOT the goods row ID.
+            // take note of spell vs normal goods fmg areas
             var spell_names    = new List<KeyValuePair<long, string>>();
             var spell_descs    = new List<KeyValuePair<long, string>>();
             var goods_names    = new List<KeyValuePair<long, string>>();

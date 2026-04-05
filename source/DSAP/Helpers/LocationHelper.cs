@@ -231,32 +231,30 @@ namespace DSAP.Helpers
         }
         #endregion
         #region Shop Helpers
-        private static List<ShopFlag> CachedShopFlags = null;
-        public static List<ShopFlag> GetShopFlags()
+        private static List<ShopRow> CachedShopRows = null;
+        public static List<ShopRow> GetShopRows()
         {
-            if (CachedShopFlags != null) return CachedShopFlags;
-            string json = MiscHelper.OpenEmbeddedResource("DSAP.Resources.ShopFlags.json");
-            CachedShopFlags = JsonSerializer.Deserialize<List<ShopFlag>>(json, MiscHelper.GetJsonOptions());
-            return CachedShopFlags;
+            var json = MiscHelper.OpenEmbeddedResource("DSAP.Resources.ShopRows.json");
+            var list = JsonSerializer.Deserialize<List<ShopRow>>(json, MiscHelper.GetJsonOptions());
+            return list;
         }
 
         private static List<ILocation> CachedShopLocations = null;
-        public static List<ILocation> GetShopFlagLocations()
+        public static List<ILocation> GetShopRowLocations()
         {
             if (CachedShopLocations != null) return CachedShopLocations;
 
             List<ILocation> locations = new List<ILocation>();
-            var shopFlags = GetShopFlags().Where(x => x.IsEnabled);
+            var shopRows = GetShopRows().Where(x => x.IsEnabled);
             var baseAddress = AddressHelper.GetEventFlagsOffset();
 
-            foreach (var shop in shopFlags)
+            foreach (var shop in shopRows)
             {
-                var (offset, bit) = AddressHelper.GetEventFlagOffset(shop.PurchaseFlag);
                 locations.Add(new Location
                 {
                     Name = shop.Name,
-                    Address = baseAddress + offset,
-                    AddressBit = bit,
+                    Address = baseAddress + AddressHelper.GetEventFlagOffset(shop.PurchaseFlag).Item1,
+                    AddressBit = AddressHelper.GetEventFlagOffset(shop.PurchaseFlag).Item2,
                     Id = shop.Id
                 });
             }
