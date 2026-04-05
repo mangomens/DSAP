@@ -14,6 +14,16 @@ namespace DSAP.Helpers
     {
         public const int AP_ITEM_OFFSET = 10000; // add to loc id for ap items
         private static readonly object _memAllocLock = new object();
+
+        // Aligned equip IDs for weapon/protector shop stubs.
+        // DSR groups weapon IDs by floor(id/100)*100 and protector IDs by floor(id/1000)*1000
+        // for icon/model lookup, so stubs must use IDs that are multiples of 100/1000.
+        internal static Dictionary<long, int> WeaponAlignedEquipIds = new();
+        internal static Dictionary<long, int> ProtectorAlignedEquipIds = new();
+        private const int WEAPON_ALIGNED_BASE = 9_100_000;    // just above vanilla max ~9,021,000
+        private const int PROTECTOR_ALIGNED_BASE = 2_700_000; // just above vanilla max ~2,643,000
+        private const int WEAPON_ALIGNED_STRIDE = 100;
+        private const int PROTECTOR_ALIGNED_STRIDE = 1000;
         internal static async Task AddAPItems(Dictionary<long, ScoutedItemInfo> scoutedLocationInfo)
         {
             // Build set of shop location IDs so we can partition stubs for shop-specific param tables
@@ -44,6 +54,7 @@ namespace DSAP.Helpers
 
              // Partition FMG text lists: spells use a separate MsgMan FMG (+0x3B8 names, +0x350 descriptions).
             // DSR looks up spell-type goods in the spell FMG, not the goods FMG, so we must write to both.
+            // DSR keys spell FMG lookups by the magicId from EquipParamGoods, NOT the goods row ID.
             var spell_names    = new List<KeyValuePair<long, string>>();
             var spell_descs    = new List<KeyValuePair<long, string>>();
             var goods_names    = new List<KeyValuePair<long, string>>();
@@ -52,6 +63,15 @@ namespace DSAP.Helpers
             ulong msgManPtrGoods = Memory.ReadULong(0x141c7e3e8);
             ulong goodsCaptionFmgStart = Memory.ReadULong(msgManPtrGoods + (ulong)MsgManStruct.OFFSET_ITEM_CAPTIONS);
             ulong spellDescFmgStart    = Memory.ReadULong(msgManPtrGoods + (ulong)MsgManStruct.OFFSET_SPELL_DESCRIPTIONS);
+
+            // Build vanilla magicId lookup from EquipParamGoods so we can key spell FMGs correctly.
+            // magicId at +0x28 in the goods param row points to the MagicParam row ID that DSR
+            // uses to look up spell names/descriptions.
+            ParamHelper.ReadFromBytes(out ParamStruct<EquipParamGoods> goodsParamForMagic,
+                EquipParamGoods.spOffset, (ps) => false); // always read fresh
+            var vanillaMagicIdMap = new Dictionary<uint, int>(); // dsrItemId -> magicId
+            foreach (var ve in goodsParamForMagic.ParamEntries)
+                vanillaMagicIdMap[ve.id] = BitConverter.ToInt32(goodsParamForMagic.ParamBytes, (int)ve.paramOffset + 0x28);
 
             for (int i = 0; i < added_names.Count; i++)
             {
@@ -65,11 +85,17 @@ namespace DSAP.Helpers
 
                 if (isSpell)
                 {
-                    // For spells: look up vanilla description from the spell description FMG
+                    // For spells: look up vanilla description and resolve magicId for FMG keying.
+                    // DSR keys spell FMG lookups by the magicId (MagicParam row), not the goods ID.
                     string spellDesc = captionEntry.Value;
+                    long spellFmgKey = nameEntry.Key; // fallback to AP loc ID
                     if (si != null && App.AllItemsByApId.TryGetValue((int)si.ItemId, out var spellItem))
                     {
-                        ulong descLoc = FindMsg(spellDescFmgStart, (uint)spellItem.Id);
+                        // Resolve magicId from vanilla goods param
+                        if (vanillaMagicIdMap.TryGetValue((uint)spellItem.Id, out int magicId) && magicId > 0)
+                            spellFmgKey = magicId;
+
+                        ulong descLoc = FindMsg(spellDescFmgStart, (uint)spellFmgKey);
                         if (descLoc != 0)
                         {
                             byte[] strBytes = Memory.ReadByteArray(descLoc, 1024);
@@ -78,8 +104,8 @@ namespace DSAP.Helpers
                                 spellDesc = vanillaStr + "\0";
                         }
                     }
-                    spell_names.Add(nameEntry);
-                    spell_descs.Add(new KeyValuePair<long, string>(captionEntry.Key, spellDesc));
+                    spell_names.Add(new KeyValuePair<long, string>(spellFmgKey, nameEntry.Value));
+                    spell_descs.Add(new KeyValuePair<long, string>(spellFmgKey, spellDesc));
                 }
                 else
                 {
@@ -165,9 +191,19 @@ namespace DSAP.Helpers
             accessoryShopEntries.Sort((a, b) => a.Key.CompareTo(b.Key));
             accessoryShopCaptions.Sort((a, b) => a.Key.CompareTo(b.Key));
 
+            // Generate aligned equip IDs so DSR's icon grouping resolves correctly.
+            // Weapons need multiples of 100; protectors need multiples of 1000.
+            WeaponAlignedEquipIds.Clear();
+            for (int i = 0; i < weaponShopEntries.Count; i++)
+                WeaponAlignedEquipIds[weaponShopEntries[i].Key] = WEAPON_ALIGNED_BASE + i * WEAPON_ALIGNED_STRIDE;
+
+            ProtectorAlignedEquipIds.Clear();
+            for (int i = 0; i < protectorShopEntries.Count; i++)
+                ProtectorAlignedEquipIds[protectorShopEntries[i].Key] = PROTECTOR_ALIGNED_BASE + i * PROTECTOR_ALIGNED_STRIDE;
+
             if (weaponShopEntries.Count > 0)
             {
-                upgradeWeapons(weaponShopEntries, weaponRealEquipIds);
+                upgradeWeapons(weaponShopEntries, weaponRealEquipIds, WeaponAlignedEquipIds);
 
                 // Build weapon captions and descriptions: use vanilla text for known DSR weapons, AP caption otherwise.
                 ulong msgManPtrWeapon = Memory.ReadULong(0x141c7e3e8);
@@ -198,19 +234,25 @@ namespace DSAP.Helpers
                                 desc = vanillaStr + "\0";
                         }
                     }
-                    weaponCaptionsWithVanilla.Add(new KeyValuePair<long, string>(entry.Key, caption));
-                    weaponShopDescriptions.Add(new KeyValuePair<long, string>(entry.Key, desc));
+                    long alignedKey = WeaponAlignedEquipIds.TryGetValue(entry.Key, out int wAid) ? wAid : entry.Key;
+                    weaponCaptionsWithVanilla.Add(new KeyValuePair<long, string>(alignedKey, caption));
+                    weaponShopDescriptions.Add(new KeyValuePair<long, string>(alignedKey, desc));
                 }
                 weaponCaptionsWithVanilla.Sort((a, b) => a.Key.CompareTo(b.Key));
                 weaponShopDescriptions.Sort((a, b) => a.Key.CompareTo(b.Key));
 
-                AddMsgs(MsgManStruct.OFFSET_WEAPON_NAMES,        weaponShopEntries,        "Weapon Names");
+                var weaponAlignedNames = weaponShopEntries
+                    .Select(e => new KeyValuePair<long, string>(
+                        WeaponAlignedEquipIds.TryGetValue(e.Key, out int wn) ? wn : e.Key, e.Value)).ToList();
+                weaponAlignedNames.Sort((a, b) => a.Key.CompareTo(b.Key));
+
+                AddMsgs(MsgManStruct.OFFSET_WEAPON_NAMES,        weaponAlignedNames,       "Weapon Names");
                 AddMsgs(MsgManStruct.OFFSET_WEAPON_CAPTIONS,     weaponCaptionsWithVanilla, "Weapon Captions");
                 AddMsgs(MsgManStruct.OFFSET_WEAPON_DESCRIPTIONS, weaponShopDescriptions,    "Weapon Descriptions");
             }
             if (protectorShopEntries.Count > 0)
             {
-                upgradeProtectors(protectorShopEntries, protectorRealEquipIds);
+                upgradeProtectors(protectorShopEntries, protectorRealEquipIds, ProtectorAlignedEquipIds);
 
                 // Build protector captions and descriptions: use vanilla text for known DSR armor, AP caption otherwise.
                 ulong msgManPtrArmor = Memory.ReadULong(0x141c7e3e8);
@@ -241,13 +283,19 @@ namespace DSAP.Helpers
                                 desc = vanillaStr + "\0";
                         }
                     }
-                    armorCaptionsWithVanilla.Add(new KeyValuePair<long, string>(entry.Key, caption));
-                    armorShopDescriptions.Add(new KeyValuePair<long, string>(entry.Key, desc));
+                    long alignedKey = ProtectorAlignedEquipIds.TryGetValue(entry.Key, out int pAid) ? pAid : entry.Key;
+                    armorCaptionsWithVanilla.Add(new KeyValuePair<long, string>(alignedKey, caption));
+                    armorShopDescriptions.Add(new KeyValuePair<long, string>(alignedKey, desc));
                 }
                 armorCaptionsWithVanilla.Sort((a, b) => a.Key.CompareTo(b.Key));
                 armorShopDescriptions.Sort((a, b) => a.Key.CompareTo(b.Key));
 
-                AddMsgs(MsgManStruct.OFFSET_ARMOR_NAMES,        protectorShopEntries,      "Armor Names");
+                var protectorAlignedNames = protectorShopEntries
+                    .Select(e => new KeyValuePair<long, string>(
+                        ProtectorAlignedEquipIds.TryGetValue(e.Key, out int pn) ? pn : e.Key, e.Value)).ToList();
+                protectorAlignedNames.Sort((a, b) => a.Key.CompareTo(b.Key));
+
+                AddMsgs(MsgManStruct.OFFSET_ARMOR_NAMES,        protectorAlignedNames,     "Armor Names");
                 AddMsgs(MsgManStruct.OFFSET_ARMOR_CAPTIONS,     armorCaptionsWithVanilla,  "Armor Captions");
                 AddMsgs(MsgManStruct.OFFSET_ARMOR_DESCRIPTIONS, armorShopDescriptions,     "Armor Descriptions");
             }
@@ -422,11 +470,11 @@ namespace DSAP.Helpers
         }
 
 
-        private static bool upgradeWeapons(List<KeyValuePair<long, string>> addedEntries, Dictionary<long, int> realEquipIds)
+        private static bool upgradeWeapons(List<KeyValuePair<long, string>> addedEntries, Dictionary<long, int> realEquipIds, Dictionary<long, int> alignedEquipIds)
         {
             bool reloadRequired = ParamHelper.ReadFromBytes(out ParamStruct<EquipParamWeapon> paramStruct,
                                                      EquipParamWeapon.spOffset,
-                                                     (ps) => ps.ParamEntries.Last().id >= 11109961);
+                                                     (ps) => ps.ParamEntries.Last().id >= WEAPON_ALIGNED_BASE);
             if (!reloadRequired)
             {
                 Log.Logger.Debug("Skipping reload of EquipParamWeapon (shop stubs)");
@@ -467,7 +515,9 @@ namespace DSAP.Helpers
                 }
 
                 byte[] stringbytes = Encoding.ASCII.GetBytes($"{entry.Value}\0");
-                paramStruct.AddParam((uint)entry.Key, parambytes, stringbytes);
+                uint paramRowId = alignedEquipIds.TryGetValue(entry.Key, out int wAid) ? (uint)wAid : (uint)entry.Key;
+                paramStruct.AddParam(paramRowId, parambytes, stringbytes);
+                Log.Logger.Verbose($"Weapon stub: loc {entry.Key} -> aligned param row {paramRowId}");
             }
 
             Log.Logger.Information($"Added {addedEntries.Count} weapon shop stubs to EquipParamWeapon");
@@ -476,11 +526,11 @@ namespace DSAP.Helpers
             return true;
         }
 
-        private static bool upgradeProtectors(List<KeyValuePair<long, string>> addedEntries, Dictionary<long, int> realEquipIds)
+        private static bool upgradeProtectors(List<KeyValuePair<long, string>> addedEntries, Dictionary<long, int> realEquipIds, Dictionary<long, int> alignedEquipIds)
         {
             bool reloadRequired = ParamHelper.ReadFromBytes(out ParamStruct<EquipParamProtector> paramStruct,
                                                      EquipParamProtector.spOffset,
-                                                     (ps) => ps.ParamEntries.Last().id >= 11109961);
+                                                     (ps) => ps.ParamEntries.Last().id >= PROTECTOR_ALIGNED_BASE);
             if (!reloadRequired)
             {
                 Log.Logger.Debug("Skipping reload of EquipParamProtector (shop stubs)");
@@ -523,7 +573,9 @@ namespace DSAP.Helpers
                 }
                 
                 byte[] stringbytes = Encoding.ASCII.GetBytes($"{entry.Value}\0");
-                paramStruct.AddParam((uint)entry.Key, parambytes, stringbytes);
+                uint paramRowId = alignedEquipIds.TryGetValue(entry.Key, out int pAid) ? (uint)pAid : (uint)entry.Key;
+                paramStruct.AddParam(paramRowId, parambytes, stringbytes);
+                Log.Logger.Verbose($"Protector stub: loc {entry.Key} -> aligned param row {paramRowId}");
             }
 
             Log.Logger.Information($"Added {addedEntries.Count} protector shop stubs to EquipParamProtector");
@@ -693,7 +745,14 @@ namespace DSAP.Helpers
             }
 
             foreach (var input in instrings)
-                msgManStruct.AddMsg((uint)input.Key, input.Value);
+            {
+                // If an entry with this ID already exists (e.g. vanilla spell FMG), update it
+                // in place so the override takes effect. Otherwise add a new entry.
+                if (msgManStruct.MsgEntries.Any(e => e.id == (uint)input.Key))
+                    msgManStruct.UpdateMsg((uint)input.Key, input.Value);
+                else
+                    msgManStruct.AddMsg((uint)input.Key, input.Value);
+            }
 
 
             msgManStruct.AddMsg(99999998, ""); // add dummy message to mark that we've been here

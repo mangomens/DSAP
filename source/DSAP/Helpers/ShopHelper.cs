@@ -35,16 +35,23 @@ namespace DSAP.Helpers
                     if (allItemsByApId.TryGetValue((int)scoutedInfo.ItemId, out var dsrItem))
                         equipType = GetEquipType(dsrItem.Category);
 
+                    // Use aligned equip IDs for weapons/protectors so DSR's icon grouping works
+                    int equipId = (int)locId;
+                    if (equipType == 0 && ApItemInjectorHelper.WeaponAlignedEquipIds.TryGetValue(locId, out int wId))
+                        equipId = wId;
+                    else if (equipType == 1 && ApItemInjectorHelper.ProtectorAlignedEquipIds.TryGetValue(locId, out int pId))
+                        equipId = pId;
+
                     result[shop.Row] = new ShopReplacement
                     {
-                        EquipId = (int)locId,
+                        EquipId = equipId,
                         EquipType = equipType,
                         Value = 0,
                         SellQuantity = 1,
                         EventFlag = shop.PurchaseFlag,
                         ShopType = 0
                     };
-                    Log.Logger.Verbose($"Shop replacement: row {shop.Row} -> AP loc {locId} ({shop.Name}), equipType={equipType}");
+                    Log.Logger.Verbose($"Shop replacement: row {shop.Row} -> AP loc {locId} equipId={equipId} ({shop.Name}), equipType={equipType}");
                 }
             }
 
