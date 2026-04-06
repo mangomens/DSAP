@@ -230,5 +230,40 @@ namespace DSAP.Helpers
             return;
         }
         #endregion
+        #region Shop Helpers
+        private static List<ShopFlag> CachedShopFlags = null;
+        public static List<ShopFlag> GetShopFlags()
+        {
+            if (CachedShopFlags != null) return CachedShopFlags;
+            string json = MiscHelper.OpenEmbeddedResource("DSAP.Resources.ShopFlags.json");
+            CachedShopFlags = JsonSerializer.Deserialize<List<ShopFlag>>(json, MiscHelper.GetJsonOptions());
+            return CachedShopFlags;
+        }
+
+        private static List<ILocation> CachedShopLocations = null;
+        public static List<ILocation> GetShopFlagLocations()
+        {
+            if (CachedShopLocations != null) return CachedShopLocations;
+
+            List<ILocation> locations = new List<ILocation>();
+            var shopFlags = GetShopFlags().Where(x => x.IsEnabled);
+            var baseAddress = AddressHelper.GetEventFlagsOffset();
+
+            foreach (var shop in shopFlags)
+            {
+                var (offset, bit) = AddressHelper.GetEventFlagOffset(shop.PurchaseFlag);
+                locations.Add(new Location
+                {
+                    Name = shop.Name,
+                    Address = baseAddress + offset,
+                    AddressBit = bit,
+                    Id = shop.Id
+                });
+            }
+
+            CachedShopLocations = locations;
+            return locations;
+        }
+        #endregion
     }
 }

@@ -50,6 +50,8 @@ public partial class App : Application
     // 
     private static Dictionary<long, ScoutedItemInfo> scoutedLocationInfo = [];
     private static Dictionary<int, ItemLot> ItemLotReplacementMap = new Dictionary<int, ItemLot>();
+    private static Dictionary<int, ShopReplacement> ShopReplacementMap = new Dictionary<int, ShopReplacement>();
+    private static HashSet<long> NativeShopLocationIds = new HashSet<long>();
     private static Dictionary<string, Tuple<int, string>> SlotLocToItemUpgMap = [];
     // Logging
     private static readonly object _lockObject = new object();
@@ -103,6 +105,8 @@ public partial class App : Application
     public void Start()
     {
         Context = new MainWindowViewModel("0.6.2 - 0.6.5");
+        Context.Host = "localhost";
+        Context.Slot = "Test1";
         
         Context.ClientVersion = Assembly.GetEntryAssembly().GetName().Version.ToString();
         Context.ConnectClicked += Context_ConnectClicked;
@@ -853,6 +857,11 @@ public partial class App : Application
             var miscLocations = LocationHelper.GetMiscFlagLocations();
 
             var fullLocationsList = bossLocations.Union(itemLocations).Union(bonfireLocations).Union(doorLocations).Union(fogWallLocations).Union(miscLocations).ToList();
+            if (DSOptions.ShopSanity)
+            {
+                var shopLocations = LocationHelper.GetShopFlagLocations();
+                fullLocationsList = fullLocationsList.Union(shopLocations).ToList();
+            }
             Client.MonitorLocationsAsync(fullLocationsList);
 
             StartEmkWatchers(EmkControllers);
@@ -1311,7 +1320,15 @@ public partial class App : Application
             }
 
             var itemId = e.Item.Id;
-            if (AllItemsByApId.TryGetValue((int)itemId, out var itemToReceive))
+
+            // Skip granting native shop items from our own slot — the shop already gave the real item
+            if (e.Player.Slot == Client.CurrentSession.ConnectionInfo.Slot
+                && NativeShopLocationIds.Contains(e.LocationId))
+            {
+                Log.Logger.Information($"Skipping native shop item grant (already obtained from shop): {e.Item.Name} from loc {e.LocationId}");
+                success = true;
+            }
+            else if (AllItemsByApId.TryGetValue((int)itemId, out var itemToReceive))
             {
                 Log.Logger.Information($"Received {itemToReceive.Name} ({itemToReceive.ApId})");
                 Client.AddOverlayMessage($"Received {itemToReceive.Name} ({itemToReceive.ApId})");
@@ -1648,6 +1665,7 @@ public partial class App : Application
     private static async void OnConnectedAsync(object sender, ConnectionChangedEventArgs args)
     {
         Log.Logger.Information("Connected to Archipelago");
+        Log.Logger.Warning("DSAP build: 2026-04-01-B");
         Client.AddOverlayMessage("Connected to Archipelago");
         Log.Logger.Information($"Playing {Client.CurrentSession.ConnectionInfo.Game} as {Client.CurrentSession.Players.GetPlayerName(Client.CurrentSession.ConnectionInfo.Slot)}");
         Client.AddOverlayMessage($"Playing {Client.CurrentSession.ConnectionInfo.Game} as {Client.CurrentSession.Players.GetPlayerName(Client.CurrentSession.ConnectionInfo.Slot)}");
@@ -1691,6 +1709,16 @@ public partial class App : Application
             await ApItemInjectorHelper.AddAPItems(scoutedLocationInfo);
 
             ItemLotHelper.BuildLotParamIdToLotMap(out ItemLotReplacementMap, SlotLocToItemUpgMap, scoutedLocationInfo);
+
+            if (DSOptions.ShopSanity)
+            {
+                ShopHelper.BuildShopReplacementMap(
+                    out ShopReplacementMap,
+                    out NativeShopLocationIds,
+                    scoutedLocationInfo,
+                    AllItemsByApId,
+                    Client.CurrentSession.ConnectionInfo.Slot);
+            }
         }
         ItemLotHelper.RandomizeStartingLoadouts();
         if (DSOptions.NoWeaponRequirements)
@@ -1700,6 +1728,12 @@ public partial class App : Application
 
         /* Set to only receive remote items and starting inventory */
         UpdateItemLots();
+        if (DSOptions.ShopSanity)
+        {
+            ShopHelper.UpdateShopLineupParams(ShopReplacementMap);
+            Log.Logger.Information("Shop randomization applied");
+            Client.AddOverlayMessage("Shop randomization applied");
+        }
         watch.Stop();
         Log.Logger.Information($"Finished setup, took {watch.ElapsedMilliseconds}ms total");
         Client.AddOverlayMessage($"Finished setup, took {watch.ElapsedMilliseconds}ms total");
@@ -1718,6 +1752,8 @@ public partial class App : Application
         SlotLocToItemUpgMap = [];
         EmkControllers = [];
         ItemLotReplacementMap = [];
+        ShopReplacementMap = [];
+        NativeShopLocationIds = [];
         scoutedLocationInfo = [];
     }
     private void OnGameDisconnected(object sender, EventArgs args)

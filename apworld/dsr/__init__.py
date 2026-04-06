@@ -121,6 +121,8 @@ class DSRWorld(World):
             self.enabled_location_categories.add(DSRLocationCategory.FOG_WALL)
         if (self.options.boss_fogwall_sanity.value == True):
             self.enabled_location_categories.add(DSRLocationCategory.BOSS_FOG_WALL)
+        if (self.options.shop_sanity.value == True):
+            self.enabled_location_categories.add(DSRLocationCategory.SHOP_ITEM)
 
         self.all_excluded_locations.update(self.options.exclude_locations.value)
 
@@ -891,6 +893,7 @@ class DSRWorld(World):
                 "guaranteed_items": self.options.guaranteed_items.value,
                 "fogwall_sanity": self.options.fogwall_sanity.value,
                 "boss_fogwall_sanity": self.options.boss_fogwall_sanity.value,
+                "shop_sanity": self.options.shop_sanity.value,
                 "logic_to_access_catacombs": self.options.logic_to_access_catacombs.current_key,
                 "randomize_starting_loadouts": self.options.randomize_starting_loadouts.value,
                 "randomize_starting_gifts": self.options.randomize_starting_gifts.value,

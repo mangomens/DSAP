@@ -34,12 +34,14 @@ namespace DSAP.Helpers
 
             var watch = System.Diagnostics.Stopwatch.StartNew();
 
-            // add items
             bool do_replacements = upgradeGoods(added_names);
 
+            // Write text to Goods FMGs (all items — weapon/protector FMGs not accessible)
             AddMsgs(MsgManStruct.OFFSET_ITEM_NAMES, added_names, "Item Names"); // names
             AddMsgs(MsgManStruct.OFFSET_ITEM_CAPTIONS, added_captions, "Item Captions"); // captions
             AddMsgs(MsgManStruct.OFFSET_ITEM_DESCRIPTIONS, added_captions, "Item Descriptions"); // info
+
+            Log.Logger.Information($"Added param stubs: {added_names.Count} goods");
             
             watch.Stop();
             Log.Logger.Information($"Finished adding new items params + msg text, took {watch.ElapsedMilliseconds}ms");
@@ -209,7 +211,7 @@ namespace DSAP.Helpers
                 //parambytes[0x1e] = idbytes[2];
                 //parambytes[0x1f] = idbytes[3];
                 byte[] iconbytes = BitConverter.GetBytes((short)2042);
-                parambytes[0x2c] = iconbytes[0]; // icon byte 0
+                parambytes[0x2c] = iconbytes[0]; // icon byte 0 (Prism Stone icon)
                 parambytes[0x2d] = iconbytes[1]; // icon byte 1
                 parambytes[0x45] |= (byte)(0x30); // turn on isDrop and isDeposit bits
                 // This will add the item to the array, and append its string to the NewString buffer
@@ -222,6 +224,7 @@ namespace DSAP.Helpers
 
             return true;
         }
+
         internal static void AddMsgs(int msgManOffset, List<KeyValuePair<long, string>> instrings, string msgsName)
         {
             // Read in system text FMGs
@@ -265,7 +268,7 @@ namespace DSAP.Helpers
             Log.Logger.Information($"Wrote string {newptxt}");
         }
 
-        private static ulong FindMsg(ulong MsgsStart, uint id)
+        internal static ulong FindMsg(ulong MsgsStart, uint id)
         {
             ulong GoodsMsgsStrTableOffset = Memory.ReadULong(MsgsStart + 0x14);
             ushort GoodsMsgsCompareEntries = Memory.ReadUShort(MsgsStart + 0xc);
