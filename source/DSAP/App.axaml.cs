@@ -149,6 +149,11 @@ public partial class App : Application
             Log.Logger.Warning(" /warp [DLC/AP/FA] - warp to the DLC/Archives Prison/Firelink Altar if you've been locked out.");
             Log.Logger.Warning("--- Client Settings ---");
             Log.Logger.Warning(" /deathlink [on/off/toggle] - change your deathlink status (does not persist beyond current session).");
+            Log.Logger.Warning("--- Developer Tools ---");
+            Log.Logger.Warning(" /genmerchant <rowMin> <rowMax> <regionAbbrev> <merchantName> <nextLocId> <nextFlagIndex>");
+            Log.Logger.Warning("   Generate Locations.py + ShopFlags.json entries for a merchant's shop rows.");
+            Log.Logger.Warning("   Run while DSR is open but BEFORE connecting to AP (needs vanilla ShopLineupParam).");
+            Log.Logger.Warning("   Output: Documents\\DSAP\\merchant_gen_<name>_<timestamp>.txt");
             Log.Logger.Warning("--- End of DSAP commands. ---");
             Client?.SendMessage(a.Command); /* send original command through client for the rest of /help - maybe player will have something if they are an admin. */
         }
@@ -402,6 +407,78 @@ public partial class App : Application
             string[] cmdparts = command.Split(" ");
             if (cmdparts.Length == 2)
                 MonitorEventFlag(Int32.Parse(cmdparts[1]));
+        }
+        else if (command.StartsWith("/genmerchant"))
+        {
+            // Usage: /genmerchant <rowMin> <rowMax> <regionAbbrev> <merchantName> <nextLocId> <nextFlagIndex>
+            // Run while DSR is open but BEFORE connecting to AP (vanilla ShopLineupParam state needed).
+            // nextFlag last was 71812672.
+            string[] cmdparts = command.Split(" ");
+            if (cmdparts.Length != 7)
+            {
+                Log.Logger.Warning("Usage: /genmerchant <rowMin> <rowMax> <regionAbbrev> <merchantName> <lastLocId> <lastFlagIndex>");
+                Log.Logger.Warning("Example: /genmerchant 1600 1617 FS Patches 11114909 71812896");
+                Log.Logger.Warning("NOTE: Run before connecting to AP so ShopLineupParam is in vanilla state.");
+            }
+            else
+            {
+                int rowMin = int.Parse(cmdparts[1]);
+                int rowMax = int.Parse(cmdparts[2]);
+                string regionAbbrev = cmdparts[3];
+                string merchantName = cmdparts[4];
+                int nextLocId = int.Parse(cmdparts[5]);
+                int nextFlag = int.Parse(cmdparts[6]);
+
+                ParamHelper.ReadFromBytes(out ParamStruct<ShopLineupParam> shopParam, ShopLineupParam.spOffset, (ps) => false);
+
+                var rows = shopParam.ParamEntries
+                    .Where(e => e.id >= rowMin && e.id <= rowMax)
+                    .OrderBy(e => e.id)
+                    .ToList();
+
+                if (rows.Count == 0)
+                {
+                    Log.Logger.Warning($"/genmerchant: No ShopLineupParam rows found in range [{rowMin}, {rowMax}]. Is DSR running?");
+                }
+                else
+                {
+                    var sbLocations = new StringBuilder();
+                    var sbShopFlags = new StringBuilder();
+                    sbLocations.AppendLine("# === Locations.py entries (paste into DSRLocationData list) ===");
+                    sbShopFlags.AppendLine("# === ShopFlags.json entries (append to ShopFlags array) ===");
+
+                    int locId = nextLocId;
+                    int flag = nextFlag;
+
+                    foreach (var entry in rows)
+                    {
+                        int offset = (int)entry.paramOffset;
+                        int equipId = BitConverter.ToInt32(shopParam.ParamBytes, offset + 0x0);
+                        byte equipType = shopParam.ParamBytes[offset + 0x17];
+
+                        var item = AllItems.FirstOrDefault(x => x.Id == equipId && ShopHelper.GetEquipType(x.Category) == equipType);
+                        string itemName = item?.Name ?? $"Unknown_{equipId}_t{equipType}";
+                        string locationName = $"{regionAbbrev}: {merchantName} - {itemName}";
+                        int nextPurchaseFlag = flag + 32;
+                        int nextLocation = locId + 1;
+
+                        sbLocations.AppendLine($"    DSRLocationData({nextLocation}, \"{locationName}\", \"{itemName}\", DSRLocationCategory.SHOP_ITEM),");
+                        sbShopFlags.AppendLine($"    {{ \"Id\": {nextLocation}, \"Name\": \"{locationName}\", \"Row\": {entry.id}, \"PurchaseFlag\": {nextPurchaseFlag} }},");
+
+                        locId++;
+                        flag+=32;
+                    }
+
+                    string outputDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "DSAP");
+                    Directory.CreateDirectory(outputDir);
+                    string timestamp = DateTime.Now.ToString("yyyyMMdd_HHmmss");
+                    string outputPath = Path.Combine(outputDir, $"merchant_gen_{merchantName}_{timestamp}.txt");
+
+                    File.WriteAllText(outputPath, sbLocations.ToString() + Environment.NewLine + sbShopFlags.ToString());
+                    Log.Logger.Information($"/genmerchant: Generated {rows.Count} entries for {merchantName} → {outputPath}");
+                    Log.Logger.Information($"/genmerchant: Next available LocationId={locId}, nextFlag={flag}");
+                }
+            }
         }
         //else if (command.StartsWith("/get")) // for debugging
         //{
@@ -1735,6 +1812,7 @@ public partial class App : Application
 
         /* Set to only receive remote items and starting inventory */
         UpdateItemLots();
+        
         if (DSOptions.ShopSanity)
         {
             ShopHelper.UpdateShopLineupParams(ShopReplacementMap);

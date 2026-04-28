@@ -32,15 +32,18 @@ namespace DSAP.Helpers
                 foreach (var row in matchingShopRows)
                 {
                     int equipType = 3; // default to Goods for non-DSR items
-                    if (allItemsByApId.TryGetValue((int)scoutedInfo.ItemId, out var dsrItem))
+                    int equipId = (int)locId;
+                    
+                    if (allItemsByApId.TryGetValue((int)scoutedInfo.ItemId, out var dsrItem) && scoutedInfo.Player.Slot == App.Client.CurrentSession.ConnectionInfo.Slot)
+                    {
                         equipType = GetEquipType(dsrItem.Category);
 
-                    // Use aligned equip IDs for weapons/protectors so DSR's icon grouping works
-                    int equipId = (int)locId;
-                    if (equipType == 0 && ApItemInjectorHelper.WeaponAlignedEquipIds.TryGetValue(locId, out int wId))
-                        equipId = wId;
-                    else if (equipType == 1 && ApItemInjectorHelper.ProtectorAlignedEquipIds.TryGetValue(locId, out int pId))
-                        equipId = pId;
+                        // Use aligned equip IDs for weapons/protectors so DSR's icon grouping works
+                        if (equipType == 0 && ApItemInjectorHelper.WeaponAlignedEquipIds.TryGetValue(locId, out int wId))
+                            equipId = wId;
+                        else if (equipType == 1 && ApItemInjectorHelper.ProtectorAlignedEquipIds.TryGetValue(locId, out int pId))
+                            equipId = pId;
+                    }
 
                     result[row.RowNum] = new ShopReplacement
                     {
